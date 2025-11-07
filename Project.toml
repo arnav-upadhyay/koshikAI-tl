@@ -1,0 +1,5 @@
+[deps]
+DataStructures = "864edb3b-99cc-5e75-8d2d-829cb0a9cfe8"
+FastaIO = "a0c94c4b-ebed-5953-b5fc-82fe598ac79f"
+IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
+JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"

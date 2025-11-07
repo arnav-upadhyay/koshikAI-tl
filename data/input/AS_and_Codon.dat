@@ -1,0 +1,39 @@
+as;tRNAas;codAS
+Ala;Ala1B ;GCU, GCA, GCG
+Ala;Ala2;GCC,
+Cys;Cys;UGC, UGU,
+Asp;Asp1;GAC, GAU,
+Glu;Glu2 ;GAA, GAG,
+Phe;Phe;UUC, UUU,
+Gly;Gly2;GGA, GGG,
+Gly;Gly3;GGC, GGU,
+His;His;CAC, CAU, 
+Ile1;Ile1;AUC, AUU, AUA 
+Lys;Lys;AAA, AAG,
+Leu;Leu1;CUG,
+Leu;Leu2;CUC, CUU,
+Leu;Leu3 ;CUA, CUG,
+Leu;Leu4 ;UUG,
+Leu;Leu5;UUA, UUG,
+Met;Met m ;AUG,
+Asn;Asn ;AAC, AAU,
+Pro;Pro1;CCG,
+Pro;Pro2;CCC, CCU,
+Pro;Pro3;CCA, CCU, CCG
+Gln;Gln1;CAA,
+Gln;Gln2;CAG,
+Arg;Arg2 ;CGU, CGC, CGA
+Arg;Arg3;CGG,
+Arg;Arg4 ;AGA,
+Arg;Arg5 ;AGG,
+Ser;Ser1;UCA, UCU, UCG
+Ser;Ser2;UCG,
+Ser;Ser3;AGC, AGU,
+Ser;Ser5;UCC, UCU,
+Thr;Thr13;ACC, ACU,
+Thr;Thr2;ACG,
+Thr;Thr4;ACA, ACU, ACG
+Val;Val1;GUA, GUG, GUU
+Val;Val2AB;GUC, GUU,
+Trp;Trp;UGG,
+Tyr;Tyr12;UAC, UAU,

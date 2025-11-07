@@ -1,0 +1,242 @@
+================================================================================
+TYPE INSTABILITIES FOUND IN CODEBASE - FIXES REQUIRED
+================================================================================
+Generated: Analysis of JET output from main_single_gene.jl
+Total Issues Found: 38
+
+================================================================================
+1. CSV FILE PARSING - Line 69 in main_single_gene.jl
+================================================================================
+Location: Lines 69-73
+Current Code:
+    metab       = DataFrame(CSV.File(metabolites_file, delim=';'))
+    amino       = DataFrame(CSV.File(aminoacids_file, delim=';'))
+    codon_conc  = DataFrame(CSV.File(codons_file, delim=';'))
+    as_cod      = DataFrame(CSV.File(as_and_codon_file, delim=';'))
+    T3_comp     = DataFrame(CSV.File(t3_comp_file, delim=';'))
+
+Issues:
+- Missing value handling: convert(::Type{InlineStrings.String3}, ::Missing)
+- Date parsing issues with tryparsenext
+- Comparison issues: isless(::Float64, ::Tuple{Float64, Int64})
+
+FIX:
+    metab       = DataFrame(CSV.File(metabolites_file, delim=';', missingstring=""))
+    amino       = DataFrame(CSV.File(aminoacids_file, delim=';', missingstring=""))
+    codon_conc  = DataFrame(CSV.File(codons_file, delim=';', missingstring=""))
+    as_cod      = DataFrame(CSV.File(as_and_codon_file, delim=';', missingstring=""))
+    T3_comp     = DataFrame(CSV.File(t3_comp_file, delim=';', missingstring=""))
+
+================================================================================
+2. STRING PROCESSING - Line 77 in main_single_gene.jl
+================================================================================
+Location: Line 77
+Current Code:
+    tags.Tag = [strip(s) for s in vcat(metab.Tag, species)]
+
+Issue:
+- strip() on Union{} type from vcat result
+- Invalid builtin function call: Base.getfield(x::Base.Iterators.Reverse{Union{}}, f::Symbol)
+
+FIX:
+    tags.Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
+
+================================================================================
+3. READMATRIX FUNCTION - Line 225 in TXTL_functions.jl
+================================================================================
+Location: Lines 225-229
+Current Code:
+    function readmatrix(filepath, sheet, range)
+        xlsx = XLSX.readxlsx(filepath)
+        xl_sheet = xlsx[sheet]
+        data = xl_sheet[range]
+        return data
+    end
+
+Issues:
+- Union{Nothing, XLSX.SheetRowStreamIteratorState} type instability
+- findall with Nothing argument
+- Missing in boolean context
+- No matching method: iterate(::XLSX.SheetRowStreamIterator, ::Int64)
+
+FIX:
+    function readmatrix(filepath::String, sheet::String, range::String)::Any
+        xlsx = XLSX.readxlsx(filepath)
+        xl_sheet = xlsx[sheet]
+        data = xl_sheet[range]
+        return data
+    end
+
+================================================================================
+4. EFAC_IMPORT FUNCTION - Line 443 in TXTL_functions.jl
+================================================================================
+Location: Line 443
+Current Code:
+    kk = conc2id[Int(wc[ii, 1])]
+    T_WC[ii, kk] = 1
+
+Issue:
+- Bool index error: ArgumentError: invalid index: Bool
+- kk can be Bool instead of Int
+
+FIX (apply to all three T_WC, T_WB, T_NC sections):
+    for ii in 1:min(62, actual_codons)
+        if wc[ii, 1] != 0
+            kk_val = Int(wc[ii, 1])
+            if kk_val > 0 && kk_val <= length(conc2id)
+                kk = Int(conc2id[kk_val])
+                if kk > 0 && kk <= no_of_tRNAs
+                    T_WC[ii, kk] = 1
+                end
+            end
+        end
+    end
+
+Apply same fix to T_WB (lines 449-455) and T_NC (lines 459-465)
+
+================================================================================
+5. RF_BALANCE FUNCTION - Line 258 in TXTL_functions.jl
+================================================================================
+Location: Lines 858-881 in call chain
+Current Code:
+    function RF_balance(y0)
+        ...
+    end
+
+Issues:
+- Missing found in boolean context in DAE function dispatch
+- Non-boolean Missing found in boolean context (multiple instances)
+
+FIX:
+    function RF_balance(y0::Vector{Float64})::Tuple{Float64, Float64, Float64}
+        c_RF3_t  = y0[31]
+        c_GTP    = y0[2]
+        c_GDP    = y0[6]
+        c_RF3 = 0.0
+        k_on_GTP_RF3  = 1.2e9 * 1e-6 * 60
+        k_on_GDP_RF3  = 2.7e7 * 1e-6 * 60
+        k_RF3_diss_GTP = 24 * 60
+        k_RF3_diss_GDP = 0.1 * 60
+        
+        function DAE!(out, du, u, p, t)
+            k_on_GTP_RF3, k_on_GDP_RF3, k_RF3_diss_GTP, k_RF3_diss_GDP, c_GTP, c_GDP, c_RF3_t = p
+            c_RF3 = u[1]
+            c_RF3_GTP = (k_on_GTP_RF3 * c_GTP * c_RF3) / k_RF3_diss_GTP
+            c_RF3_GDP = (k_on_GDP_RF3 * c_GDP * c_RF3) / k_RF3_diss_GDP
+            out[1] = c_RF3_t - c_RF3 - c_RF3_GTP - c_RF3_GDP
+        end
+        
+        p = (k_on_GTP_RF3, k_on_GDP_RF3, k_RF3_diss_GTP, k_RF3_diss_GDP, c_GTP, c_GDP, c_RF3_t)
+        u0 = [0.0]
+        du0 = [0.0]
+        differential_vars = [false]
+        tspan = (0.0, 100000.0)
+        prob = DAEProblem(DAE!, du0, u0, tspan, p, differential_vars = differential_vars, maxiters = 3000, abstol = 1e-6, reltol = 1e-6, verbose = false)
+        sol = solve(prob, DABDF2(), reltol = 1e-6, abstol = 1e-6)
+        x1 = c_RF3 = sol[end][]
+        x2 = (k_on_GTP_RF3 * c_GTP * c_RF3) / k_RF3_diss_GTP
+        x3 = (k_on_GDP_RF3 * c_GDP * c_RF3) / k_RF3_diss_GDP
+        return x1, x2, x3
+    end
+
+================================================================================
+6. ALPHA_STRUC_GENERATION - Line 133 in TXTL_functions.jl
+================================================================================
+Location: Line 133
+Current Code:
+    stripped_codons = map(strip, single_codons)
+
+Issue:
+- strip() on SubString in Union{} context
+- Type Int64 has no field chunks
+
+FIX:
+    function alpha_struc_generation(tags)::Matrix{Float64}
+        alpha_struc = zeros(tags.no_of_tRNAs, length(tags.Seq)-1)
+        str_cod = fill("", length(tags.codAS), 3)
+        for i in 1:length(tags.codAS)
+            single_codons  = split(tags.codAS[i], ",")
+            stripped_codons = [strip(String(c)) for c in single_codons]  # FIX HERE
+            str_cod[i, 1:length(stripped_codons)] = stripped_codons
+        end
+        # ... rest of function remains the same
+    end
+
+================================================================================
+7. THREADING IN SIMULATE_SINGLE_GENE_THREADED - Line 303 in main_single_gene.jl
+================================================================================
+Location: Line 303
+Current Code:
+    local_tags = deepcopy(tags)
+
+Issue:
+- deepcopy on AlmostBlockDiagonal type causing broadcast issues
+- Invalid builtin function call: Base.getfield(x::Base.Broadcast.Broadcasted{...}, f::Symbol)
+
+FIX:
+    # Option 1: Avoid deepcopy if possible
+    # Option 2: Ensure tags structure doesn't contain problematic types
+    # Option 3: Use a selective copy instead of deepcopy
+    local_tags = deepcopy(tags)
+    # If above causes issues, consider:
+    # local_tags = copy(tags)  # Shallow copy instead
+    # Or manually copy only needed fields
+
+================================================================================
+8. CSV WRITE - Line 511 in main_single_gene.jl
+================================================================================
+Location: Line 511
+Current Code:
+    CSV.write(csv_file, df)
+
+Issues:
+- CSV.io is not defined
+- iterate(::Nothing) issues
+- No matching method: iterate(::Nothing)
+
+FIX:
+    # Ensure df is properly typed DataFrame
+    df::DataFrame = DataFrame()
+    # ... populate df with proper types ...
+    CSV.write(csv_file, df)
+
+================================================================================
+PRIORITY FIXES (Most Critical)
+================================================================================
+1. HIGH PRIORITY: Line 443 (efac_import) - Bool index error
+   - Fix immediately - this will cause runtime errors
+
+2. HIGH PRIORITY: Line 77 (main_single_gene.jl) - String stripping
+   - Add type conversion to prevent Union{} errors
+
+3. MEDIUM PRIORITY: Line 69 (main_single_gene.jl) - CSV parsing
+   - Add missingstring parameter to handle missing values
+
+4. MEDIUM PRIORITY: Line 133 (alpha_struc_generation) - String processing
+   - Convert to String before stripping
+
+5. MEDIUM PRIORITY: Line 225 (readmatrix) - Add return type annotation
+   - Helps with type inference
+
+6. LOW PRIORITY: Line 303 (deepcopy) - Threading issues
+   - May not cause errors but reduces performance
+
+7. LOW PRIORITY: Line 511 (CSV.write) - Write issues
+   - Usually works but can have type issues with certain data
+
+================================================================================
+IMPLEMENTATION CHECKLIST
+================================================================================
+[ ] Fix 1: Add missingstring to CSV.File calls (main_single_gene.jl:69)
+[ ] Fix 2: Convert to String before strip (main_single_gene.jl:77)
+[ ] Fix 3: Add type annotations to readmatrix (TXTL_functions.jl:225)
+[ ] Fix 4: Fix Bool index in efac_import (TXTL_functions.jl:443-465)
+[ ] Fix 5: Add return type to RF_balance (TXTL_functions.jl:258)
+[ ] Fix 6: Fix string stripping in alpha_struc_generation (TXTL_functions.jl:133)
+[ ] Fix 7: Review deepcopy usage in simulate_single_gene_threaded (main_single_gene.jl:303)
+[ ] Fix 8: Ensure DataFrame types before CSV.write (main_single_gene.jl:511)
+
+================================================================================
+After making fixes, re-run JET analysis:
+    julia -e 'using JET; report_file("main_single_gene.jl")'
+================================================================================
