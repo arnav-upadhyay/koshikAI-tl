@@ -1,0 +1,42 @@
+# =============================
+# Julia project .gitignore
+# =============================
+
+# --- Keep these under version control ---
+Project.toml
+Manifest.toml
+
+# --- Ignore build artifacts, caches, etc. ---
+*.jl.cov
+*.jl.mem
+*.ji
+*.so
+*.dylib
+*.dll
+
+# --- Ignore Jupyter / IJulia notebooks outputs ---
+*.ipynb_checkpoints/
+
+# --- Ignore data and generated files ---
+*.csv
+*.tsv
+*.xlsx
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.gif
+*.pdf
+
+# --- Ignore logs and temporary files ---
+*.log
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Ignore Julia package environments (optional) ---
+.julia/
+deps/
+scratch/
