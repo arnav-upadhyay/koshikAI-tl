@@ -3,8 +3,8 @@
 # =============================
 
 # --- Keep these under version control ---
-Project.toml
-Manifest.toml
+#Project.toml
+#Manifest.toml
 
 # --- Ignore build artifacts, caches, etc. ---
 *.jl.cov
