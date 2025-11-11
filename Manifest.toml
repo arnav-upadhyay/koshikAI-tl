@@ -224,7 +224,7 @@ version = "17.4.0+2"
 
 julia_version = "1.11.3"
 manifest_format = "2.0"
-project_hash = "8bf58a9b773cb8cd29d4222587a4def73703f0aa"
+project_hash = "105d1d356f66ce59b57938e1bca7fcc2188197bd"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "27cecae79e5cc9935255f90c53bb831cc3c870d7"
@@ -370,6 +370,12 @@ version = "1.10.1"
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 version = "1.11.0"
+
+[[deps.BenchmarkTools]]
+deps = ["Compat", "JSON", "Logging", "Printf", "Profile", "Statistics", "UUIDs"]
+git-tree-sha1 = "7fecfb1123b8d0232218e2da0c213004ff15358d"
+uuid = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+version = "1.6.3"
 
 [[deps.BioGenerics]]
 deps = ["TranscodingStreams"]
@@ -2196,6 +2202,10 @@ version = "3.1.0"
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+version = "1.11.0"
+
+[[deps.Profile]]
+uuid = "9abbd945-dff8-562f-b5e8-e1ebf5ef1b79"
 version = "1.11.0"
 
 [[deps.PtrArrays]]
