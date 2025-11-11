@@ -251,7 +251,7 @@ function efac_import(tags, arrange,wc_temp, wb_temp,nc_temp, conc2id  )
 
 end
 
-function readmatrix(filepath, sheet, range)
+function readmatrix(filepath::String, sheet::String, range::String)::Any #---
 	xlsx = XLSX.readxlsx(filepath) # Load the workbook
 	xl_sheet = xlsx[sheet] # Access the specific sheet
 	data = xl_sheet[range] # Read the data from the specified range
@@ -672,7 +672,7 @@ function alpha_struc_generation!(tags)
 	str_cod = fill("", length(tags.codAS), 3)
 	for i in 1:length(tags.codAS)
 		single_codons 	= split(tags.codAS[i], ",")
-		stripped_codons = map(strip, single_codons)
+		stripped_codons = [strip(String(c)) for c in single_codons] #changed -11.11.25-arnav
 		str_cod[i,1:length(stripped_codons)] = stripped_codons
 	end
 
