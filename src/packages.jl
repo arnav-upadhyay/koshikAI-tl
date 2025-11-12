@@ -21,6 +21,10 @@ using Colors
 using JET
 using Dates
 
+# Code optimization
+using JET
+using BenchmarkTools
+
 # Files 
 
 include("datatypes.jl")

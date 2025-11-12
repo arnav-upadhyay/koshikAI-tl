@@ -1,6 +1,82 @@
 # Species_and_sequences! ---------------------------------------------------------------------------
 
 """
+12/11/2025 
+species_and_sequences!(tags, sequence_file, hybrid_file)
+
+loads species names, amino acid, their relations to codons, codon efficiencies, and compatibilites of codons to tRNAs
+laods and converts DNA sequence to RNA and amino acids 
+prepares matrices necessary for ODE 
+eveything is stored in tags structure
+"""
+
+function species_and_sequences!(tags, sequence_file, hybrid_file)
+
+	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
+	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
+
+	seq_file = sequence_path * "\\" * sequence_file
+	hyb_file = hybrid_path * "\\" * hybrid_file
+
+	
+	seqs, seq_names = seqs_import_transcripts(seq_file) # Function that transforms DNA Sequence into mRNA, amino acids and codons
+
+	hyb_files = [hyb_file]
+	hyb_file_dict = Dict{String, String}()
+	for (i, seq_name) in enumerate(seq_names)
+		hyb_file_dict[seq_name] = hyb_files[i]
+	end
+	tags.seq_names = seq_names
+	tags.no_of_seqs = length(seq_names)
+
+	if tags.growth_rate < 0.56
+		tags.avail_rib = -1.1191*tags.growth_rate^2 + 2.0385*tags.growth_rate + 0.1996; # calculate percentage of available ribosome, from Matamouros et al. 2021
+	else
+		tags.avail_rib = 1.0 
+	end
+
+	# Starting conentrations 
+
+	data_path = joinpath(@__DIR__, "..", "data", "input")
+	metab 		= DataFrame(CSV.File(data_path * "\\metabolites.dat", delim=';', missingstring="")) # contains model species with 3 letter tags
+	amino 		= DataFrame(CSV.File(data_path * "\\aminoacids.dat", delim=';', missingstring="")) # AS long name, 3 letters, short form for aatRNAs and tRNAs
+	codon_conc 	= DataFrame(CSV.File(data_path * "\\Codons.dat", delim=';', missingstring="")) # Contains codons and the relative binding strength of the cognate tRNA to them
+	as_cod 		= DataFrame(CSV.File(data_path * "\\AS_and_Codon.dat", delim=';', missingstring="")) # tRNAs and codons they recognize
+	T3_comp 	= DataFrame(CSV.File(data_path * "\\T3_comp.dat", delim=';', missingstring="")) # codons and their compatible tRNAs (can be one or two tRNAs)
+	const_vars  = DataFrame(CSV.File(data_path * "\\Constant_variables.dat", delim=';', missingstring="")) # Tags of constant variables  
+			
+
+	# Tag structure
+
+	# Additional tags for model species 
+	species 		= ["RNA","S70","rna","PRT","PTC"]
+	tags.Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
+
+
+	tags.Seq 		= seqs[seq_names[1]].Codon
+	tags.Tagcell 	= metab.Tag
+	tags.Name 		= metab.Name
+	tags.cod 		= map(strip,codon_conc.cod)
+	tags.efac 		= codon_conc.efac
+	tags.as 		= as_cod.as
+	tags.tRNAs 		= as_cod.tRNAas
+	tags.codAS 		= as_cod.codAS # contains codons related to tRNAs
+	tags.t3tRNA 	= T3_comp.t3tRNA
+	tags.AA 		= amino.triple
+	tags.Tag_constant_vars = const_vars.Tag
+
+	tags.no_of_tRNAs = 38 # Model can be adjusted to organisms with different tRNA number. E. coli has 38
+	tags.no_of_variables = length(tags.Name)
+
+	# create_indices_struct!(tags, indices)
+
+	indices_dictionary!(tags)
+
+	return seqs, seq_names, hyb_file_dict
+end
+
+
+"""
     seqs_import_transcripts_parallel(filename::String)
 
 Function to read in sequences from a fasta file. Throws error if the sequence is not divisible by three.
@@ -88,6 +164,63 @@ function indices_dictionary!(tags)
 end
 
 # ------------------Efficiency factor initialization -------------------------------------------------------------------------------
+
+
+function efficiency_factor_initialization!(tags, seqs, seq_names, hyb_file_dict)
+
+	# Scan for sequence features
+
+	# scan for internal SD-like sequences & scan for positve aa clusters positive amino acids (ph 7): 
+	# lysine(K), arginine(R) (histidine not considered)
+	# if unflagged than than only ones are written into the arrays
+
+	efac_int_sd_dict = Dict{String, Vector{Float64}}()
+
+	if anti_shinedalgarno == true
+		for seq_name in seq_names
+			rawHybridization = readdlm(hyb_file_dict[seq_name], ';')
+			hybridEnergies = rawHybridization[2:end,3]
+			hybridEnergies = replace(hybridEnergies, "NA" => missing)
+			tags.hybridEnergies = ifelse.(coalesce.(hybridEnergies, 0.0) .>= 0.0, 0.0, hybridEnergies);
+			efac_int_sd_dict[seq_name]= scan_for_int_sd(tags)
+		end
+	else
+		for seq_name in seq_names
+			L = size(seqs[seq_name].Codon, 1) - 1
+			efac_int_sd_dict[seq_name] = ones(L)
+		end
+	end;
+
+	# Positive amino acid clusters
+	efac_pos_aa_dict = Dict{String, Vector{Float64}}()
+	if positive_aminoacid == true
+		for seq_name in seq_names
+			# Create a temporary tags structure for this specific sequence
+			temp_tags = deepcopy(tags)
+			temp_tags.Seq = seqs[seq_name].Codon
+			efac_pos_aa_dict[seq_name] = scan_for_pos_aa(temp_tags, seqs, [seq_name])
+		end
+	else
+		for seq_name in seq_names
+			efac_pos_aa_dict[seq_name] = ones(size(seqs[seq_name].Codon, 1) - 1)
+		end
+	end
+
+	## dynamic efficiency factor initialization 
+
+	T_WC, T_WB, T_NC, T_NN = efac_import(tags)
+
+	tags.T_WC = T_WC
+	tags.T_WB = T_WB
+	tags.T_NC = T_NC
+	tags.T_NN = T_NN
+
+	tags.dynamic_efficiency = dynamic_efficiency
+
+	return efac_pos_aa_dict, efac_int_sd_dict
+
+end
+
 
 function scan_for_int_sd(tags) # ONLY FOR ONE SEQUENCE
         
@@ -196,9 +329,22 @@ function scan_for_pos_aa(tags, seqs, seq_names)
 end
 
 
-function efac_import(tags, arrange,wc_temp, wb_temp,nc_temp, conc2id  )
+function efac_import(tags)
 
-	
+	## Import
+	data_path = joinpath(@__DIR__, "..", "data", "input")
+	file = data_path * "\\Vieira_data_eco_revised.xlsx";
+
+	arrange = readmatrix(file,"switch","A2:A63");
+	arrange = convert(Matrix{Int64}, arrange);
+	wc_temp = readmatrix(file,"wc1","A2:A63");
+	wc_temp = convert(Matrix{Int64}, wc_temp)
+	wb_temp = readmatrix(file,"wb1","A2:B63");
+	wb_temp = convert(Matrix{Int64}, wb_temp)
+	nc_temp = readmatrix(file,"nc1","A2:K63");
+	nc_temp = convert(Matrix{Int64}, nc_temp)
+	conc2id = readmatrix(file,"conc_to_id","D2:D44");
+	conc2id = convert(Matrix{Int64}, conc2id)
 
 	no_of_tRNAs = tags.no_of_tRNAs;
 		
@@ -340,6 +486,96 @@ function dynEffficiencyCalculation(WC,WB,NC,NN,EFG_GTP)
     return k_eff
 end   
 
+# -------------------------------- Calculation of initial concentrations --------------------
+
+"""
+	calculation_of_initial_concentration!(tags)
+
+14/05/2025 Cedric Meyer
+calculates species concentrations for the predefined growth rate 
+outputs y0, mutates tags
+"""
+
+function calculation_of_initial_concentration!(tags, seqs, seq_names)
+
+	# Function   : calculation_of_initial_concentration
+	# Written by : Jan Mueller (jan.mueller@ibvt.uni-stuttgart.de)
+	# Created on : 18/08/2022
+	# Last Update: 23/04/2025 - Restructuring of the code to make it more readable
+	# Purpose    : script to calculate concentration from fit equations
+
+	data_path = joinpath(@__DIR__, "..", "data", "input")
+
+
+	# Set tags.Seq for preintegration (using first sequence)
+	tags.Seq = seqs[seq_names[1]].Codon
+
+	## setting of initial concentration vector y0
+	y0 = zeros(size(tags.Tag,1)); # One position for every state variable 
+	codon_0 = zeros(size(tags.Seq,1)-1) # one position for each codon
+	y0 = vcat(y0,codon_0); # combines both vectors
+	tags.constant_vars = zeros(37) # Nucleotides, Eut, Est, RFt, RRF, amino acids, plasmid
+
+	GR = tags.growth_rate
+
+	# aminoacyl-tRNA synthetases
+	CoeffvalsARS = readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "aaRS", "B2:D21")
+	ARSconcCalc  = CoeffvalsARS[:,3] .+(CoeffvalsARS[:,1].*GR)./(CoeffvalsARS[:,2].+GR)
+	c_ARS 		 = ARSconcCalc;
+
+	# Translation machinery
+	CoeffvalsMet 		= readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "Translation_machinery", "B2:D14")
+	METconcCalc = CoeffvalsMet[:,3]+(CoeffvalsMet[:,1].*GR)./(CoeffvalsMet[:,2].+GR);
+	sum_IF      = sum(METconcCalc[3:5])
+	total       = 1+0.4103+0.4219
+	IF1_fix_ratio = sum_IF * 0.4103/total
+	IF2_fix_ratio = sum_IF * 0.4219/total
+	IF3_fix_ratio = sum_IF * 1/total
+	y0[tags.idx["IF1"]]    = IF1_fix_ratio;
+	y0[tags.idx["IF2"]]    = IF2_fix_ratio;
+	y0[tags.idx["IF3"]]    = IF3_fix_ratio;
+	S50 = METconcCalc[2]
+	S50_058      = CoeffvalsMet[2,3] +(CoeffvalsMet[2,1].*0.58)./(CoeffvalsMet[2,2]+0.58);
+	y0[tags.idx["S30"]:tags.idx["S50"]] = METconcCalc[1:2];  # 30S, 50S, IF1, IF2 & IF3
+	y0[tags.idx["EFG"]]    = METconcCalc[6];    # EFG
+	y0[tags.idx["EFD"]]    = 3;                 # EFTu_GDP has to be greater than zero for initial solving of the DAE system
+	tags.constant_vars[13:15] = METconcCalc[7:9];  # 
+	y0[tags.idx["RF3"]]    = METconcCalc[12];
+	tags.constant_vars[16]    = METconcCalc[13];
+
+	# tRNAs
+	CoeffvalsReltRNA 	= readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "reltRNA", "B2:D40")
+	tRNAconcCalc = (CoeffvalsReltRNA[:,1].*exp.(-CoeffvalsReltRNA[:,2].*GR).+CoeffvalsReltRNA[:,3]).*S50 
+	y0[tags.idx["b1t"]:tags.idx["ty1"]] = tRNAconcCalc[1:39];
+
+	# Nucleotides 
+	NucConc058 = [9630; 4870; 8290; 2730; 555;  676; 1790;  100; 281; 23.7;  100;  360];
+	NucconcCalc  = NucConc058*S50/S50_058;
+	tags.constant_vars[1:12]  = NucconcCalc[1:12]; # nucleotides 
+
+	# Amino acids
+	AAConc058  = [2550;   39; 4230; 96000; 18.2; 351; 67.6; 151.5;  405; 151.5; 145;  511;  385;  3810;  569;  68;  179;  4020; 12.1;  28.9];
+	AAconcCalc   = AAConc058 *S50/S50_058;        
+	tags.constant_vars[17:36] = AAconcCalc[1:20];
+
+	c_TC  = [METconcCalc[10]; METconcCalc[11]];
+
+	tags.c_ARS = c_ARS
+	tags.c_TC   = c_TC
+
+	y0[tags.idx["EFG"]]    = y0[tags.idx["EFG"]]   .*tags.scale.EF_scale; #EFG
+	tags.constant_vars[13:14] = tags.constant_vars[13:14].*tags.scale.EF_scale; #EFTu_total & EFTs_total
+
+	# Plasmid 
+	C_D			= 0.001;				 # nM --> 4.246e-3 µM/0.004246  /2.5e-3/one Gene --> 0.0010 µM
+	tags.constant_vars[37] = C_D
+
+
+	## read out total concentrations for mass balances
+	tags.c_tot_EFG = y0[tags.idx["EFG"]]
+
+	return y0
+end
 
 # ---------------------------------- Release factor balance --------------------------------------------------------------
 
@@ -793,4 +1029,70 @@ function sum_of_t3complex!(tags)
 	end  
 
 	tags.t3_Codon_struc = t3_Codon_struc                                                             
+end
+
+"""
+	combined_states_vector(tags, y_steady_state, seqs, seq_names)
+
+12.11.2025
+Function to build a state vector that includes metabolites, outputvariables for sequ. 1, codons sequ. 1, output 2, sequence 2 ...
+"""
+
+function combined_states_vector(tags, y_steady_state, seqs, seq_names)
+
+	# 1. Build combined state vector for this set
+	y0_metab_output = y_steady_state[1:length(tags.idx)]                                        # All species without the codons
+	y0_metab = y0_metab_output[1:end-5]                                                         # Species of the metabolite pool
+	y0_output = y0_metab_output[end - 4: end]                                                   # Output species  "RNA" "S70"  "rna"  "PRT"  "PTC"
+	ribosome_positions = [zeros(length(seqs[seq_name].Codon) - 1) for seq_name in seq_names]    # All codons per sequence 
+	output_sequences = reduce(vcat, ([y0_output; ribosome_positions[i]...] for i in eachindex(ribosome_positions))) # One set of output variables per sequence 
+	y0_all = vcat(y0_metab, output_sequences);                                                   # concatenate everything: metabolites pool, output 1, sequence 1, output 2, sequence 2, output 3, sequence 3 ...
+
+	return y0_all
+end
+
+# ------------------------------- Integration -----------------------------------------
+
+# 3. Define the ODE function for solving (distributed, focused on derivatives)
+function ODE_parallel_distributed!(du, u, p, t)
+
+    n_metab = length(tags.idx) -5 		# number of metabolites in the shared pool that is used by all sequences 
+    y_metab = u[1:n_metab]				# Save all pool species from u in a vector 
+    idx = n_metab						# Index of last pool species
+    y_codons = Vector{Vector{Float64}}()	# Vector to store vectors 
+    y_codons_lengths = [length(seqs[seq_name].Codon) + 4 for seq_name in seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
+
+    for L in y_codons_lengths				# Fills y_codons list with codons of the sequences
+        push!(y_codons, u[idx+1:idx+L])
+        idx += L
+    end
+
+    local_tags_list = p[1]				# Extraction of local_tags_list from p
+    n_seq = tags.no_of_seqs		# save number of sequences
+    du_metab_all = [zeros(n_metab) for _ in 1:n_seq]	# List to store a du vector for the metabolite pool for every sequence 
+    du_codons = Vector{Vector{Float64}}(undef, n_seq)	# List to store a du vector for the codons for every sequence 
+
+    # Distributed parallelization of per-sequence rate calculations
+    results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
+        local_tags = deepcopy(local_tags_list[i])		# Extraction of local tags
+        u_seq = vcat(y_metab, y_codons[i])					# Sequenzspezifischer state vector
+        du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
+        ODE!(du_seq, u_seq, local_tags, t)	# Aufruf des ODE systems
+        return du_seq									# Rückgabe von du, abgespeichert in results
+    end
+    
+    for i in 1:n_seq								# Loop over number of sequences
+        du_metab_all[i] .= results[i][1:n_metab]	# Abspeichern aller rates der Metabolite 
+        du_codons[i] = results[i][n_metab+1:end]		# Abspeichern aller rates für die Ribosomen
+    end
+
+    du_metab = zeros(n_metab)						# Summation der n_metab du
+    for i in 1:n_seq
+        du_metab .+= du_metab_all[i]
+    end
+
+    du .= vcat(du_metab, vcat(du_codons...))			# Zusammensetzung des gesamten rates vectors
+
+
+    nothing
 end

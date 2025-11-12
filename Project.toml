@@ -13,5 +13,4 @@ JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
 LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
-FastaIO = "a0c94c4b-ebed-5953-b5fc-82fe598ac79f"
-JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+
