@@ -7,6 +7,7 @@ using CSV
 using DataFrames
 using XLSX
 using FastaIO
+using UnPack
 
 ## Solvers
 using DifferentialEquations
@@ -26,7 +27,6 @@ using JET
 using BenchmarkTools
 
 # Files 
-
 include("datatypes.jl")
 include("efficiency_factors.jl")
 include("functions.jl")

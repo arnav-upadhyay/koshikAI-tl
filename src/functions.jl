@@ -10,7 +10,7 @@ prepares matrices necessary for ODE
 eveything is stored in tags structure
 """
 
-function species_and_sequences!(tags, sequence_file, hybrid_file)
+function species_and_sequences(µ, sequence_file, hybrid_file)
 
 	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
 	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
@@ -21,18 +21,19 @@ function species_and_sequences!(tags, sequence_file, hybrid_file)
 	
 	seqs, seq_names = seqs_import_transcripts(seq_file) # Function that transforms DNA Sequence into mRNA, amino acids and codons
 
+	
 	hyb_files = [hyb_file]
 	hyb_file_dict = Dict{String, String}()
 	for (i, seq_name) in enumerate(seq_names)
 		hyb_file_dict[seq_name] = hyb_files[i]
 	end
-	tags.seq_names = seq_names
-	tags.no_of_seqs = length(seq_names)
+	seq_names = seq_names
+	no_of_seqs = length(seq_names)
 
-	if tags.growth_rate < 0.56
-		tags.avail_rib = -1.1191*tags.growth_rate^2 + 2.0385*tags.growth_rate + 0.1996; # calculate percentage of available ribosome, from Matamouros et al. 2021
+	if µ < 0.56
+		avail_rib = -1.1191*tags.growth_rate^2 + 2.0385*tags.growth_rate + 0.1996; # calculate percentage of available ribosome, from Matamouros et al. 2021
 	else
-		tags.avail_rib = 1.0 
+		avail_rib = 1.0 
 	end
 
 	# Starting conentrations 
@@ -50,29 +51,30 @@ function species_and_sequences!(tags, sequence_file, hybrid_file)
 
 	# Additional tags for model species 
 	species 		= ["RNA","S70","rna","PRT","PTC"]
-	tags.Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
+	Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
+	
+	Seq 		= seqs[seq_names[1]].Codon
+	Tagcell 	= metab.Tag
+	Name 		= metab.Name
+	cod 		= map(strip,codon_conc.cod)
+	efac 		= codon_conc.efac
+	as 			= as_cod.as
+	tRNAs 		= as_cod.tRNAas
+	codAS 		= as_cod.codAS # contains codons related to tRNAs
+	t3tRNA 		= T3_comp.t3tRNA
+	AA 			= amino.triple
+	Tag_constant_vars = const_vars.Tag
 
+	no_of_tRNAs = 38 # Model can be adjusted to organisms with different tRNA number. E. coli has 38
+	no_of_variables = length(Name)
 
-	tags.Seq 		= seqs[seq_names[1]].Codon
-	tags.Tagcell 	= metab.Tag
-	tags.Name 		= metab.Name
-	tags.cod 		= map(strip,codon_conc.cod)
-	tags.efac 		= codon_conc.efac
-	tags.as 		= as_cod.as
-	tags.tRNAs 		= as_cod.tRNAas
-	tags.codAS 		= as_cod.codAS # contains codons related to tRNAs
-	tags.t3tRNA 	= T3_comp.t3tRNA
-	tags.AA 		= amino.triple
-	tags.Tag_constant_vars = const_vars.Tag
+	idx = create_indices_struct(Tag)
 
-	tags.no_of_tRNAs = 38 # Model can be adjusted to organisms with different tRNA number. E. coli has 38
-	tags.no_of_variables = length(tags.Name)
+	# indices_dictionary!(tags)
 
-	# create_indices_struct!(tags, indices)
+	species_and_seqs = txtl_types.species_and_sequences(seq_names, no_of_seqs, µ, avail_rib, Tag, Seq, Tagcell, Name, cod, efac, as, tRNAs, codAS, t3tRNA, AA, Tag_constant_vars, no_of_tRNAs, no_of_variables)
 
-	indices_dictionary!(tags)
-
-	return seqs, seq_names, hyb_file_dict
+	return seqs, seq_names, hyb_file_dict, species_and_seqs, idx
 end
 
 
@@ -163,10 +165,26 @@ function indices_dictionary!(tags)
 	nothing 
 end
 
+"""
+	create_indices_struct(tags, indices)
+
+23/06/2025
+Cedric Meyer
+Fills indices struct with indices of all dynamic variables.
+"""
+
+function create_indices_struct(Tag)
+
+	idx = txtl_types.indices_dynamic_variables((1:lastindex(Tag)...))
+	
+	return idx
+end
+
+
 # ------------------Efficiency factor initialization -------------------------------------------------------------------------------
 
 
-function efficiency_factor_initialization!(tags, seqs, seq_names, hyb_file_dict)
+function efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs)
 
 	# Scan for sequence features
 
@@ -176,13 +194,13 @@ function efficiency_factor_initialization!(tags, seqs, seq_names, hyb_file_dict)
 
 	efac_int_sd_dict = Dict{String, Vector{Float64}}()
 
-	if anti_shinedalgarno == true
+	if flags.anti_shinedalgarno == true
 		for seq_name in seq_names
 			rawHybridization = readdlm(hyb_file_dict[seq_name], ';')
 			hybridEnergies = rawHybridization[2:end,3]
 			hybridEnergies = replace(hybridEnergies, "NA" => missing)
-			tags.hybridEnergies = ifelse.(coalesce.(hybridEnergies, 0.0) .>= 0.0, 0.0, hybridEnergies);
-			efac_int_sd_dict[seq_name]= scan_for_int_sd(tags)
+			hybridEnergies = ifelse.(coalesce.(hybridEnergies, 0.0) .>= 0.0, 0.0, hybridEnergies);
+			efac_int_sd_dict[seq_name]= scan_for_int_sd(hybridEnergies)
 		end
 	else
 		for seq_name in seq_names
@@ -193,12 +211,9 @@ function efficiency_factor_initialization!(tags, seqs, seq_names, hyb_file_dict)
 
 	# Positive amino acid clusters
 	efac_pos_aa_dict = Dict{String, Vector{Float64}}()
-	if positive_aminoacid == true
+	if flags.positive_aminoacid == true
 		for seq_name in seq_names
-			# Create a temporary tags structure for this specific sequence
-			temp_tags = deepcopy(tags)
-			temp_tags.Seq = seqs[seq_name].Codon
-			efac_pos_aa_dict[seq_name] = scan_for_pos_aa(temp_tags, seqs, [seq_name])
+			efac_pos_aa_dict[seq_name] = scan_for_pos_aa(seqs, [seq_name])
 		end
 	else
 		for seq_name in seq_names
@@ -208,21 +223,16 @@ function efficiency_factor_initialization!(tags, seqs, seq_names, hyb_file_dict)
 
 	## dynamic efficiency factor initialization 
 
-	T_WC, T_WB, T_NC, T_NN = efac_import(tags)
+	T_WC, T_WB, T_NC, T_NN = efac_import(species_and_seqs)
 
-	tags.T_WC = T_WC
-	tags.T_WB = T_WB
-	tags.T_NC = T_NC
-	tags.T_NN = T_NN
+	dynamic_efficiencies = txtl_types.dynamic_efficiency_factors(T_WC, T_WB, T_NC, T_NN)
 
-	tags.dynamic_efficiency = dynamic_efficiency
-
-	return efac_pos_aa_dict, efac_int_sd_dict
+	return efac_pos_aa_dict, efac_int_sd_dict, dynamic_efficiencies
 
 end
 
 
-function scan_for_int_sd(tags) # ONLY FOR ONE SEQUENCE
+function scan_for_int_sd(hybridEnergies) # ONLY FOR ONE SEQUENCE
         
 	# Function   : scan_for_int_sd
 	# Written by : Jan Mueller (jan.mueller@ibvt.uni-stuttgart.de), Christina
@@ -232,12 +242,10 @@ function scan_for_int_sd(tags) # ONLY FOR ONE SEQUENCE
 	# Purpose    : Function to analyze nucleotide sequence for internal SD like features 
 
 	# efac_int_sd = Dict()
-	Average_hybrid_energy_per_codon = zeros(Int(size(tags.hybridEnergies,1)/3))
+	Average_hybrid_energy_per_codon = zeros(Int(size(hybridEnergies,1)/3))
 
-	size(tags.hybridEnergies,1)/3
-	
-	for kk = 1:Int(size(tags.hybridEnergies,1)/3)
-		Average_hybrid_energy_per_codon[kk,1] = maximum(tags.hybridEnergies[3*kk-2:3*kk,1]); # mean replaced with max
+	for kk = 1:Int(size(hybridEnergies,1)/3)
+		Average_hybrid_energy_per_codon[kk,1] = maximum(hybridEnergies[3*kk-2:3*kk,1]); # mean replaced with max
 	end
 
 	temp_efac_int_sd = 1 ./(0.65 .+0.28.*(Average_hybrid_energy_per_codon*(-1))); # Li 2012
@@ -272,11 +280,11 @@ end
 
 
 """
-    scan_for_pos_aa(tags, seqs, seq_names)
+    scan_for_pos_aa(seqs, seq_names)
 Analyze amino acid sequence for stretches of positive amino acids (K, R) and negative amino acids (E, D).
 Written by: Marc
 """
-function scan_for_pos_aa(tags, seqs, seq_names)
+function scan_for_pos_aa(seqs, seq_names)
     # Get amino acid sequence from the current sequence (not always the first)
     # The sequence name should be the first (and only) element in seq_names
     seq_name = seq_names[1]
@@ -329,7 +337,7 @@ function scan_for_pos_aa(tags, seqs, seq_names)
 end
 
 
-function efac_import(tags)
+function efac_import(species_and_seqs)
 
 	## Import
 	data_path = joinpath(@__DIR__, "..", "data", "input")
@@ -346,7 +354,7 @@ function efac_import(tags)
 	conc2id = readmatrix(file,"conc_to_id","D2:D44");
 	conc2id = convert(Matrix{Int64}, conc2id)
 
-	no_of_tRNAs = tags.no_of_tRNAs;
+	no_of_tRNAs = species_and_seqs.no_of_tRNAs
 		
 	## Re-arrange
 
@@ -496,7 +504,7 @@ calculates species concentrations for the predefined growth rate
 outputs y0, mutates tags
 """
 
-function calculation_of_initial_concentration!(tags, seqs, seq_names)
+function calculation_of_initial_concentration(species_and_seqs, seqs, seq_names, scale, idx)
 
 	# Function   : calculation_of_initial_concentration
 	# Written by : Jan Mueller (jan.mueller@ibvt.uni-stuttgart.de)
@@ -508,15 +516,15 @@ function calculation_of_initial_concentration!(tags, seqs, seq_names)
 
 
 	# Set tags.Seq for preintegration (using first sequence)
-	tags.Seq = seqs[seq_names[1]].Codon
+	Seq_preintegration = seqs[seq_names[1]].Codon
 
 	## setting of initial concentration vector y0
-	y0 = zeros(size(tags.Tag,1)); # One position for every state variable 
-	codon_0 = zeros(size(tags.Seq,1)-1) # one position for each codon
+	y0 = zeros(size(species_and_seqs.Tag,1)); # One position for every state variable 
+	codon_0 = zeros(size(species_and_seqs.Seq,1)-1) # one position for each codon
 	y0 = vcat(y0,codon_0); # combines both vectors
-	tags.constant_vars = zeros(37) # Nucleotides, Eut, Est, RFt, RRF, amino acids, plasmid
+	constant_vars = zeros(37) # Nucleotides, Eut, Est, RFt, RRF, amino acids, plasmid
 
-	GR = tags.growth_rate
+	GR = species_and_seqs.µ
 
 	# aminoacyl-tRNA synthetases
 	CoeffvalsARS = readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "aaRS", "B2:D21")
@@ -531,50 +539,49 @@ function calculation_of_initial_concentration!(tags, seqs, seq_names)
 	IF1_fix_ratio = sum_IF * 0.4103/total
 	IF2_fix_ratio = sum_IF * 0.4219/total
 	IF3_fix_ratio = sum_IF * 1/total
-	y0[tags.idx["IF1"]]    = IF1_fix_ratio;
-	y0[tags.idx["IF2"]]    = IF2_fix_ratio;
-	y0[tags.idx["IF3"]]    = IF3_fix_ratio;
+	y0[idx.IF1]    = IF1_fix_ratio;
+	y0[idx.IF2]    = IF2_fix_ratio;
+	y0[idx.IF3]    = IF3_fix_ratio;
 	S50 = METconcCalc[2]
 	S50_058      = CoeffvalsMet[2,3] +(CoeffvalsMet[2,1].*0.58)./(CoeffvalsMet[2,2]+0.58);
-	y0[tags.idx["S30"]:tags.idx["S50"]] = METconcCalc[1:2];  # 30S, 50S, IF1, IF2 & IF3
-	y0[tags.idx["EFG"]]    = METconcCalc[6];    # EFG
-	y0[tags.idx["EFD"]]    = 3;                 # EFTu_GDP has to be greater than zero for initial solving of the DAE system
-	tags.constant_vars[13:15] = METconcCalc[7:9];  # 
-	y0[tags.idx["RF3"]]    = METconcCalc[12];
-	tags.constant_vars[16]    = METconcCalc[13];
+	y0[idx.S30:idx.S50] = METconcCalc[1:2];  # 30S, 50S, IF1, IF2 & IF3
+	y0[idx.EFG]    = METconcCalc[6];    # EFG
+	y0[idx.EFD]    = 3;                 # EFTu_GDP has to be greater than zero for initial solving of the DAE system
+	constant_vars[13:15] = METconcCalc[7:9];  # 
+	y0[idx.RF3]    = METconcCalc[12];
+	constant_vars[16]    = METconcCalc[13];
 
 	# tRNAs
 	CoeffvalsReltRNA 	= readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "reltRNA", "B2:D40")
 	tRNAconcCalc = (CoeffvalsReltRNA[:,1].*exp.(-CoeffvalsReltRNA[:,2].*GR).+CoeffvalsReltRNA[:,3]).*S50 
-	y0[tags.idx["b1t"]:tags.idx["ty1"]] = tRNAconcCalc[1:39];
+	y0[idx.b1t:idx.ty1] = tRNAconcCalc[1:39];
 
 	# Nucleotides 
 	NucConc058 = [9630; 4870; 8290; 2730; 555;  676; 1790;  100; 281; 23.7;  100;  360];
 	NucconcCalc  = NucConc058*S50/S50_058;
-	tags.constant_vars[1:12]  = NucconcCalc[1:12]; # nucleotides 
+	constant_vars[1:12]  = NucconcCalc[1:12]; # nucleotides 
 
 	# Amino acids
 	AAConc058  = [2550;   39; 4230; 96000; 18.2; 351; 67.6; 151.5;  405; 151.5; 145;  511;  385;  3810;  569;  68;  179;  4020; 12.1;  28.9];
 	AAconcCalc   = AAConc058 *S50/S50_058;        
-	tags.constant_vars[17:36] = AAconcCalc[1:20];
+	constant_vars[17:36] = AAconcCalc[1:20];
 
 	c_TC  = [METconcCalc[10]; METconcCalc[11]];
 
-	tags.c_ARS = c_ARS
-	tags.c_TC   = c_TC
-
-	y0[tags.idx["EFG"]]    = y0[tags.idx["EFG"]]   .*tags.scale.EF_scale; #EFG
-	tags.constant_vars[13:14] = tags.constant_vars[13:14].*tags.scale.EF_scale; #EFTu_total & EFTs_total
+	y0[idx.EFG]    = y0[idx.EFG]   .*scale.EF_scale; #EFG
+	constant_vars[13:14] = constant_vars[13:14].*scale.EF_scale; #EFTu_total & EFTs_total
 
 	# Plasmid 
 	C_D			= 0.001;				 # nM --> 4.246e-3 µM/0.004246  /2.5e-3/one Gene --> 0.0010 µM
-	tags.constant_vars[37] = C_D
+	constant_vars[37] = C_D
 
 
 	## read out total concentrations for mass balances
-	tags.c_tot_EFG = y0[tags.idx["EFG"]]
+	c_tot_EFG = y0[idx.EFG]
 
-	return y0
+	initial_concentrations = txtl_types.initial_concentration(Seq_preintegration, constant_vars, c_TC, c_ARS, c_tot_EFG)
+
+	return y0, initial_concentrations
 end
 
 # ---------------------------------- Release factor balance --------------------------------------------------------------
@@ -587,7 +594,7 @@ end
 Calculates the balance between RF3 bound to GTP and GDP from total RF3 amount
 """
 
-function RF_balance!(y0, tags)
+function RF_balance!(y0, initial_concentrations)
 
 	# Function   : RF_balance V1.0
 	# Written by : Marc Buschlüter (mabuschlueter@web.de), Jan Müller (jan.mueller@ibvt.uni-stuttgart.de)
@@ -597,8 +604,8 @@ function RF_balance!(y0, tags)
 
 	## set fixed concentrations
 	c_RF3_t  = y0[16]  				   # µM - RF3 
-	c_GTP    = tags.constant_vars[2]   # µM - GTP
-	c_GDP    = tags.constant_vars[6]   # µM - GDP 
+	c_GTP    = initial_concentrations.constant_vars[2]   # µM - GTP
+	c_GDP    = initial_concentrations.constant_vars[6]   # µM - GDP 
 
 	## Initialize RF3    
 
@@ -673,14 +680,14 @@ simulates everything except tRNA related fun
 """
 
 
-function preintegration(tags, y0, M)
+function preintegration(tags, y0, M, scale)
 	## preintegration - Simulation until steady state before introduction of the disturbance of interest - the sequence
 
 	y_steady_state = copy(y0)
 
-	TC_scale_init = tags.scale.V_TC_scale; # array [1,1]
+	TC_scale_init = scale.V_TC_scale; # array [1,1]
 
-	tags.scale.V_TC_scale = 0.0; # array [1,1]
+	scale.V_TC_scale = 0.0; # array [1,1]
 
 	# Preintegration
 
@@ -698,7 +705,7 @@ function preintegration(tags, y0, M)
 
 	y_steady_state[1:end] = sol[end]
 
-	tags.scale.V_TC_scale = TC_scale_init;
+	scale.V_TC_scale = TC_scale_init;
 
 	return y_steady_state
 
@@ -747,7 +754,7 @@ function EF_balance_exponential(E_in, y0, tags)
 	end
 
 	# Set parameter vector 
-	c_EFG_t  = tags.c_tot_EFG*tags.scale.EF_scale; #0.8 * c_30S_t;
+	c_EFG_t  = tags.init_c.c_tot_EFG*tags.scale.EF_scale; #0.8 * c_30S_t;
 
 	vector_k = [0.45;0.55;0.80;0.75;0.99;0.99;0.99;0.99;0.65;0.90
 				0.90;0.90;0.99;0.99;0.99;0.99;0.99;0.70;0.99;0.99
@@ -762,8 +769,8 @@ function EF_balance_exponential(E_in, y0, tags)
 	c_vec_T3 		= zeros(38)
 	c_vec_aatRNA 	= zeros(38)
 	
-	c_vec_tRNA 		= y0[tags.idx["ta1"]:tags.idx["ty1"]]
-	c_vec_tRNA_t 	= y0[tags.idx["ta1"]:tags.idx["ty1"]];
+	c_vec_tRNA 		= y0[tags.idx.ta1:tags.idx.ty1]
+	c_vec_tRNA_t 	= y0[tags.idx.ta1:tags.idx.ty1];
 
 	p = (c_EFG_t, vector_k,K_EFG_GTP, K_EFG_GDP, Keq_EFTu, Keq_T3, c_vec_T3, c_vec_aatRNA, c_vec_tRNA, c_vec_tRNA_t, E_in)
 
@@ -810,25 +817,25 @@ function EF_balance!(tags, y0, y_steady_state)
 
 	# Elongation factor balance 
 
-	vec_tRNA 	= tags.Tag[tags.idx["ta1"]:tags.idx["ty1"]] # all tRNA tags 
-	vec_aatRNA 	= tags.Tag[tags.idx["tA1"]:tags.idx["tY1"]] # all aa-tRNA tags 
-	vec_T3 		= tags.Tag[tags.idx["a1t"]:tags.idx["y1t"]] # all ternary complexes tags 
+	vec_tRNA 	= tags.species_and_sequences.Tag[tags.idx.ta1:tags.idx.ty1] # all tRNA tags 
+	vec_aatRNA 	= tags.species_and_sequences.Tag[tags.idx.tA1:tags.idx.tY1] # all aa-tRNA tags 
+	vec_T3 		= tags.species_and_sequences.Tag[tags.idx.a1t:tags.idx.y1t] # all ternary complexes tags 
 
 	vect = ["EFG";"EFD"; vec_T3 ;"EGT";"EGD";"EFT"; vec_aatRNA ; vec_tRNA]     
 
 	# first aa-tRNA then tRNA 5x3 char array containing elongation factors and GTP/GDP (;'ta1';'tA1';'a1t')
-	no_bal = 3*tags.no_of_tRNAs+8;  #number of metabolites for EL_balance
+	no_bal = 3*tags.species_and_sequences.no_of_tRNAs+8;  #number of metabolites for EL_balance
 
 	EL_FAC_in 		= zeros(no_bal,1); # ELongation FACtor    
 	position_elfac 	= zeros(no_bal,1);
 
-	position_elfac = [tags.idx[species] for species in vect]
+	position_elfac = [getfield(tags.idx, Symbol(f)) for f in vect]
 
 	EL_FAC_in[1:end-3] = y0[position_elfac]
 
-	EL_FAC_in[end-2] = tags.constant_vars[2] 	# GTP
-	EL_FAC_in[end-1] = tags.constant_vars[6] 	# GDP
-	EL_FAC_in[end]   = tags.constant_vars[13] 	# Eut
+	EL_FAC_in[end-2] = tags.init_c.constant_vars[2] 	# GTP
+	EL_FAC_in[end-1] = tags.init_c.constant_vars[6] 	# GDP
+	EL_FAC_in[end]   = tags.init_c.constant_vars[13] 	# Eut
 
 	EL_FAC_out = EF_balance_exponential(EL_FAC_in, y0, tags);
 
@@ -850,16 +857,19 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 
 	for (i, seq_name) in enumerate(seq_names)
 		
-		local_tags 		= deepcopy(tags)
-		local_tags.Seq 	= seqs[seq_name].Codon
-		local_tags.sequence_name = seq_name
+
+
+		# local_tags 		= deepcopy(tags)
+		
+		sequence 		= seqs[seq_name].Codon
+		sequence_name 	= seq_name
 
 		# Additional tags for model species 
 		species 		= ["RNA"* string(i),"S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
-		local_tags.Tag 	= [strip(s) for s in vcat(tags.Tag[1:end-5],species)] 
+		Tags 	= [strip(s) for s in vcat(tags.Tag[1:end-5],species)] 
 		
 		# Arrays necessary for elongation
-		alpha_struc_generation!(local_tags)
+		alpha_struc_generation!(sequence)
 		N_generation!(local_tags)
 		tRNAcharging!(local_tags)
 		sum_of_t3complex!(local_tags)
@@ -867,6 +877,9 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		# Efficiency factors
 		local_tags.efac_pos_aa 		= efac_pos_aa_dict[local_tags.sequence_name]
 		local_tags.efac_int_sd 	    = efac_int_sd_dict[local_tags.sequence_name]
+
+
+		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, tags.species_and_sequences, tags.flags, tags.dyn_eff, tags.init_c, tags.p_met, tags.p_seq, sequence, sequence_name, Tags)
 
 		push!(local_tags_list, local_tags)
 	end
@@ -902,12 +915,12 @@ function alpha_struc_generation!(tags)
 	# for codon j 
 
 	# Generate zero matrix with the tRNAs in the rows and the codons in the columns
-	alpha_struc = zeros(tags.no_of_tRNAs,length(tags.Seq)-1)
+	alpha_struc = zeros(tags.species_and_sequences.no_of_tRNAs,length(tags.Seq)-1)
 
 	# For every tRNA get every cognate codon
-	str_cod = fill("", length(tags.codAS), 3)
-	for i in 1:length(tags.codAS)
-		single_codons 	= split(tags.codAS[i], ",")
+	str_cod = fill("", length(tags.species_and_sequences.codAS), 3)
+	for i in 1:length(tags.species_and_sequences.codAS)
+		single_codons 	= split(tags.species_and_sequences.codAS[i], ",")
 		stripped_codons = [strip(String(c)) for c in single_codons] #changed -11.11.25-arnav
 		str_cod[i,1:length(stripped_codons)] = stripped_codons
 	end
@@ -917,8 +930,8 @@ function alpha_struc_generation!(tags)
 	# if the codonsequence fits with the codon (that can be bound by a specific
 	# t3-complex) the codon gets the value one
 	# Array with codons of gene sequence 
-	strCodon = tags.Seq[1:end-1]
-	for t in 1:tags.no_of_tRNAs # tRNAas
+	strCodon = sequence[1:end-1]
+	for t in 1:tags.species_and_sequences.no_of_tRNAs # tRNAas
 		for j = 1:size(strCodon, 1) # codons of the sequence 
 			for m = 1:size(str_cod,2) # cognate codons of tRNAs
 				if str_cod[t,m]  == String(strCodon[j]) # Is the current tRNA the one that reads the current codon?
@@ -930,7 +943,7 @@ function alpha_struc_generation!(tags)
 
 	# Extension of alpha_struc with zeros to get the same dimension as N
 	# (N= matrix of loaded tRNA per Codon)
-	O = zeros(size((tags.Name),1)-tags.no_of_tRNAs, length(tags.Seq)-1)
+	O = zeros(size((tags.species_and_sequences.Name),1)-tags.species_and_sequences.no_of_tRNAs, length(sequence)-1)
 	alpha_struc = vcat(O, alpha_struc)
 
 	tags.alpha_struc = alpha_struc
@@ -992,8 +1005,8 @@ function tRNAcharging!(tags)
 	# see MOD.EL_rhs-->tRNA_charging: muliplication of tempV_ARS and tRNA_charg leads 
 	# to the deletion of unsuitable couples)
 
-	P = zeros(tags.idx["ty1"], tags.idx["ty1"]) # idx of last tRNA
-	O = zeros(20,tags.idx["b1t"]) 
+	P = zeros(tags.idx.ty1, tags.idx.ty1) # idx of last tRNA
+	O = zeros(20,tags.idx.b1t) 
 	temp_tRNA_charg = hcat(O,tRNA_charg)
 	tRNA_charg = vcat(P,temp_tRNA_charg)
 	tags.tRNA_charg = tRNA_charg
@@ -1041,7 +1054,7 @@ Function to build a state vector that includes metabolites, outputvariables for 
 function combined_states_vector(tags, y_steady_state, seqs, seq_names)
 
 	# 1. Build combined state vector for this set
-	y0_metab_output = y_steady_state[1:length(tags.idx)]                                        # All species without the codons
+	y0_metab_output = y_steady_state[1:length(tags.species_and_sequences.Tag)]                                        # All species without the codons
 	y0_metab = y0_metab_output[1:end-5]                                                         # Species of the metabolite pool
 	y0_output = y0_metab_output[end - 4: end]                                                   # Output species  "RNA" "S70"  "rna"  "PRT"  "PTC"
 	ribosome_positions = [zeros(length(seqs[seq_name].Codon) - 1) for seq_name in seq_names]    # All codons per sequence 
@@ -1056,43 +1069,56 @@ end
 # 3. Define the ODE function for solving (distributed, focused on derivatives)
 function ODE_parallel_distributed!(du, u, p, t)
 
-    n_metab = length(tags.idx) -5 		# number of metabolites in the shared pool that is used by all sequences 
-    y_metab = u[1:n_metab]				# Save all pool species from u in a vector 
-    idx = n_metab						# Index of last pool species
-    y_codons = Vector{Vector{Float64}}()	# Vector to store vectors 
-    y_codons_lengths = [length(seqs[seq_name].Codon) + 4 for seq_name in seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
+    local_tags_list = p[1]				# Extraction of local_tags_list from p
+    seq_names       = p[2]
+    seqs            = p[3]
+    tags            = local_tags_list[1]
 
-    for L in y_codons_lengths				# Fills y_codons list with codons of the sequences
-        push!(y_codons, u[idx+1:idx+L])
+    n_metab = length(tags.Tag) -5 		# number of metabolites in the shared pool that is used by all sequences 
+
+    @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
+    idx = n_metab						# Index of last pool species
+   
+    y_codons_lengths = Int[length(seqs[seq_name].Codon) + 4 for seq_name in seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
+
+    y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
+    idx = n_metab
+    @views for (i,L) in enumerate(y_codons_lengths)
+        y_codons[i] = u[idx+1:idx+L]  # ✅ View statt Kopie
         idx += L
     end
 
-    local_tags_list = p[1]				# Extraction of local_tags_list from p
-    n_seq = tags.no_of_seqs		# save number of sequences
+    
+    n_seq = tags.no_of_seqs 		# save number of sequences
     du_metab_all = [zeros(n_metab) for _ in 1:n_seq]	# List to store a du vector for the metabolite pool for every sequence 
     du_codons = Vector{Vector{Float64}}(undef, n_seq)	# List to store a du vector for the codons for every sequence 
 
     # Distributed parallelization of per-sequence rate calculations
     results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
         local_tags = deepcopy(local_tags_list[i])		# Extraction of local tags
-        u_seq = vcat(y_metab, y_codons[i])					# Sequenzspezifischer state vector
+        u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
         du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
-        ODE!(du_seq, u_seq, local_tags, t)	# Aufruf des ODE systems
+        ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems
         return du_seq									# Rückgabe von du, abgespeichert in results
     end
-    
-    for i in 1:n_seq								# Loop over number of sequences
-        du_metab_all[i] .= results[i][1:n_metab]	# Abspeichern aller rates der Metabolite 
+
+    @views for i in 1:n_seq								# Loop over number of sequences
+        du_metab_all[i] .= results[i][1:n_metab]	    # Abspeichern aller rates der Metabolite 
         du_codons[i] = results[i][n_metab+1:end]		# Abspeichern aller rates für die Ribosomen
     end
 
-    du_metab = zeros(n_metab)						# Summation der n_metab du
+    du_metab = zeros(n_metab)						    # Summation der n_metab du
     for i in 1:n_seq
         du_metab .+= du_metab_all[i]
     end
 
-    du .= vcat(du_metab, vcat(du_codons...))			# Zusammensetzung des gesamten rates vectors
+    @views du[1:n_metab] .= du_metab                    # Zusammensetzung des gesamten rates vectors
+    idx = n_metab
+    for i in 1:n_seq
+        len = length(du_codons[i])
+        @views du[idx+1:idx+len] .= du_codons[i]
+        idx += len
+    end			
 
-
-    nothing
+    return nothing
 end

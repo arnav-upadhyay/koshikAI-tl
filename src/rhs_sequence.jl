@@ -39,7 +39,7 @@ function rhs_sequence!(du, u, p)
     V_TCmax 	= k_cat_Pol * C_RNP
     V_degmax    = k_cat_E * C_RNE
 
-    du[tags.idx["RNA"]] += (V_TCmax/(len_sequence*3) * C_D * tags.scale.V_TC_scale / ( K_M_D * (1 + (n_DNA_t-n_DNA_s)* 0.001/K_M_D)+ C_RNP + C_D * tags.scale.V_TC_scale )) - 
+    du[tags.idx.RNA] += (V_TCmax/(len_sequence*3) * C_D * tags.scale.V_TC_scale / ( K_M_D * (1 + (n_DNA_t-n_DNA_s)* 0.001/K_M_D)+ C_RNP + C_D * tags.scale.V_TC_scale )) - 
     (V_degmax * RNA / (K_M_deg  + C_RNE + RNA ))	# 170
 
     ## translation elongation ----------------------------------------
@@ -77,7 +77,7 @@ function rhs_sequence!(du, u, p)
         # dynamic efficiency factor 
     if tags.dynamic_efficiency == true
 
-        c_T3 = u[tags.idx["a1t"] : tags.idx["y1t"]];
+        c_T3 = u[tags.idx.a1t : tags.idx.y1t];
         efac = zeros(Float64, 62,1); 
 
         WC = tags.T_WC * c_T3;
@@ -196,13 +196,13 @@ function rhs_sequence!(du, u, p)
     rate_RIB[len_sequence-1] += - V_TL_TE
 
     ######### !!!!!!!!!!! Indexing of output variables needs to be adjusted to single sequence ??????????????? Or is it????????????
-    du[tags.idx["PTC"]] += V_TL_TE - k_rec_min * PTC;	            # PTC
-    du[tags.idx["S30"]] += k_rec_min * PTC;                         # rate of 30S release due to recycling
-    du[tags.idx["S50"]] +=  k_rec_min * PTC;                        # rate of 50S release due to recycling
-    du[tags.idx["PRT"]] = V_TL_TE;                                  # rate of PRT (Protein)
-    du[tags.idx["RGT"]] = -V_TL_TE -V_RF3_GTP_diss +V_RF3_GTP_ass;  # rate of RGT
-    du[tags.idx["RGD"]] =  V_TL_TE -V_RF3_GDP_diss +V_RF3_GDP_ass;  # rate of RGD
-    du[tags.idx["RF3"]] =          +V_RF3_GDP_diss +V_RF3_GTP_diss -V_RF3_GTP_ass -V_RF3_GDP_ass; # rate of RF3
+    du[tags.idx.PTC] += V_TL_TE - k_rec_min * PTC;	            # PTC
+    du[tags.idx.S30] += k_rec_min * PTC;                         # rate of 30S release due to recycling
+    du[tags.idx.S50] +=  k_rec_min * PTC;                        # rate of 50S release due to recycling
+    du[tags.idx.PRT] = V_TL_TE;                                  # rate of PRT (Protein)
+    du[tags.idx.RGT] = -V_TL_TE -V_RF3_GTP_diss +V_RF3_GTP_ass;  # rate of RGT
+    du[tags.idx.RGD] =  V_TL_TE -V_RF3_GDP_diss +V_RF3_GDP_ass;  # rate of RGD
+    du[tags.idx.RF3] =          +V_RF3_GDP_diss +V_RF3_GTP_diss -V_RF3_GTP_ass -V_RF3_GDP_ass; # rate of RF3
 
     # translation elongation - calculation of du 
 
@@ -220,14 +220,14 @@ function rhs_sequence!(du, u, p)
         rate_RIB[len_sequence-1] = rate_RIB[len_sequence-1] + V_TL_EL[end];
 
         # concentration of the unloaded tRNA
-        du[tags.idx["ta1"]:tags.idx["ty1"]] .+= K_tRNA[end-tags.no_of_tRNAs+1:end]
+        du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.no_of_tRNAs+1:end]
 
         # concentration of the ternary-complex
         du[1: num_species] .+= - K_T3;
-        du[tags.idx["EGT"]]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
-        du[tags.idx["EGD"]]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
-        du[tags.idx["RNA"]] += + V_TL_EL[12];
-        du[tags.idx["rna"]] += - V_TL_EL[12];
+        du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
+        du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
+        du[tags.idx.RNA] += + V_TL_EL[12];
+        du[tags.idx.rna] += - V_TL_EL[12];
 
     end
 
