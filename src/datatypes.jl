@@ -298,6 +298,8 @@ struct transcription
 	V_degmax::Float64
 	K_M_deg::Float64
 	k_D::Float64
+	n_DNA_t::Float64 
+	n_DNA_s::Float64
 end
 
 struct elongation 
@@ -345,10 +347,76 @@ struct parameters_sequence
 	PTC::PTC_recycling
 end
 
+# for dynamic_efficiencies
+
+struct WC
+	a_WC2::Float64
+	a_WC3::Float64
+	a_WC4::Float64
+	a_WC5::Float64
+	a_WC7::Float64
+	a_WC8::Float64
+	a_WC9::Float64
+	a_WC10::Float64
+	a_WC11::Float64 
+end
+
+struct WB
+	a_WB2::Float64  
+	a_WB3::Float64 
+	a_WB4::Float64  
+	a_WB5::Float64 
+	a_WB7::Float64 
+	a_WB8::Float64 
+	a_WB9::Float64 
+	a_WB10::Float64 
+	a_WB11::Float64 
+end
+
+struct NC
+	a_NC2::Float64
+	a_NC3::Float64
+	a_NC4::Float64
+	a_NC5::Float64
+	a_NC7::Float64
+	a_NC8::Float64
+	a_NC9::Float64
+	a_NC10::Float64
+	a_NC11::Float64
+end
+
+struct others 
+	k_WC5::Float64
+	a_NN2::Float64 
+	a_init_selec::Float64
+	k_WCrej::Float64
+	k_WB5::Float64
+	k_NC5::Float64
+end
+
+struct EFG_GTP_dependent
+	k_WC6::Float64
+	k_WCm6::Float64
+	k_WC7::Float64
+	k_WB6::Float64
+	k_WBm6::Float64
+	k_WB7::Float64
+	k_NC6::Float64
+	k_NCm6::Float64 
+	k_NC7::Float64
+end
+
+struct parameters_dynamic_efficiency
+	others::others
+	WC::WC
+	WB::WB
+	NC::NC
+	EFG_GTP::EFG_GTP_dependent
+end
+
 # ---------------------------- Preintegration ----------------------------------
 
 struct data_struct_preintegration 
-
 	scale::scale
     idx::indices_dynamic_variables
     species_and_sequences::species_and_sequences
@@ -357,7 +425,7 @@ struct data_struct_preintegration
     init_c::initial_concentration
     p_met::parameters_metabolites
     p_seq::parameters_sequence
-
+	p_dyn::parameters_dynamic_efficiency
 end
 
 # ----------------------------- Integration ---------------------------------------
@@ -371,9 +439,18 @@ struct data_struct_integration
     init_c::initial_concentration
     p_met::parameters_metabolites
     p_seq::parameters_sequence
-	sequence::LongSequence{RNAAlphabet{2}}
+	p_dyn::parameters_dynamic_efficiency
 	sequence_name::String
 	Tags::Vector{SubString{String}}
+	alpha_struc::Matrix{Float64}
+	matrix_N::Matrix{Float64}
+	tRNA_charg::Matrix{Float64}
+	t3_Codon_struc::Matrix{Float64}
+	efac_pos_aa::Vector{Float64}
+	efac_int_sd::Vector{Float64}
+	seq_names::Vector{String}
+	idx_first_codon::Int32
+
 end
 
 # --------------------------------- data_struct ----------------------------------

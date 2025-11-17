@@ -414,82 +414,47 @@ function readmatrix(filepath::String, sheet::String, range::String)::Any #---
 end
 
 
-function dynEffficiencyCalculation(WC,WB,NC,NN,EFG_GTP)
-    ## kinetic parameters (k)
- 
-    # WC                # WB                # NC                # NN
-    k_WC1  = 140;       k_WB1  = 140;       k_NC1  = 140;       k_NN1  = 140;   
-    k_WCm1 =  85;       k_WBm1 =  85;       k_NCm1 =  85;       k_NNm1 =  85;
-    k_WC2  = 190;       k_WB2  = 190;       k_NC2  = 190;      
-    k_WCm2 = 0.2;       k_WBm2 =   1;       k_NCm2 =  80;      
-    k_WC3  = 260;       k_WB3  =  25;       k_NC3  = 0.4;     
-    k_WC4  =  10;       k_WB4  =  10;       k_NC4  =  10;      
-    k_WC5  =  20;       k_WB5  = 1.6;       k_NC5  = 0.1;      
-    k_WCrej =0.1;       k_WBrej= 1.1;       k_NCrej=   6;     
-    k_WC6  = 150;       k_WB6  = 150;       k_NC6  = 150;      
-    k_WCm6 = 140;       k_WBm6 = 140;       k_NCm6 = 140;
-    k_WC7  = 100;       k_WB7  = 100;       k_NC7  = 100;
-    k_WC8  =  30;       k_WB8  =  30;       k_NC8  =  30;
-    k_WC9  = 500;       k_WB9  = 500;       k_NC9  = 500;
-    k_WC10 =   5;       k_WB10 =   5;       k_NC10 =   5;
-    k_WC11 =  20;       k_WB11 =  20;       k_NC11 =  20;
-   
-    ## alphas (a)
-   
-    # Cognate WC (WC)
-    a_WC2  = (k_WCm2+k_WC3)/(k_WC2*k_WC3);
-    a_WC3  = 1/k_WC3;  
-    a_WC4  = 1/k_WC4; 
-    a_WC5  = 1/k_WC5; 
-    a_WC6f = 1/(EFG_GTP*k_WC6);
-    a_WC6b = k_WCm6/(EFG_GTP*k_WC6*k_WC7);
-    a_WC7  = 1/k_WC7; 
-    a_WC8  = 1/k_WC8; 
-    a_WC9  = 1/k_WC9; 
-    a_WC10 = 1/k_WC10; 
-    a_WC11 = 1/k_WC11; 
+function dynEffficiencyCalculation(tags, EFG_GTP, u)
     
-    # Cognate WB (WB)
-    a_WB2 = (k_WB1*(k_WB3+k_WBm2))/(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2);
-    a_WB3 =         (k_WB1*k_WB2)/(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2);
-    a_WB4 =   (k_WB3*k_WB1*k_WB2)/(k_WB4*(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2));
-    a_WB5 =   (k_WB3*k_WB1*k_WB2)/((k_WB5+k_WBrej)*(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2));
+	@unpack a_WC2, a_WC3, a_WC4, a_WC5, a_WC7, a_WC8, a_WC9, a_WC10, a_WC11 = tags.p_dyn.WC
+
+	@unpack a_WB2, a_WB3, a_WB4, a_WB5, a_WB7, a_WB8, a_WB9, a_WB10, a_WB11 = tags.p_dyn.WB 
+
+	@unpack a_NC2 , a_NC3 , a_NC4 , a_NC5, a_NC7 , a_NC8 , a_NC9 , a_NC10, a_NC11 = tags.p_dyn.NC 
+
+	@unpack k_WC5, a_NN2, a_init_selec, k_WCrej, k_WB5, k_NC5 = tags.p_dyn.others
+
+	@unpack k_WC6, k_WCm6, k_WC7, k_WB6, k_WBm6, k_WB7, k_NC6, k_NCm6, k_NC7 = tags.p_dyn.EFG_GTP
+
+	# GTP dependent 
+	a_WC6f = 1/(EFG_GTP*k_WC6);
+    a_WC6b = k_WCm6/(EFG_GTP*k_WC6*k_WC7);
+
     a_WB6f = 1/(EFG_GTP*k_WB6);
     a_WB6b = k_WBm6/(EFG_GTP*k_WB6*k_WB7);
-    a_WB7  = 1/k_WB7; 
-    a_WB8  = 1/k_WB8; 
-    a_WB9  = 1/k_WB9; 
-    a_WB10 = 1/k_WB10; 
-    a_WB11 = 1/k_WB11; 
-    
-    # Near-cognate (NC)
-    a_NC2 = (k_NC1*(k_NC3+k_NCm2))/(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2);
-    a_NC3 =        (k_NC1*k_NC2) /(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2);
-    a_NC4 =  (k_NC3*k_NC1*k_NC2) /(k_NC4*(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2));
-    a_NC5 =  (k_NC3*k_NC1*k_NC2) /((k_NC5+k_NCrej)*(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2));
+
     a_NC6f = 1/(EFG_GTP*k_NC6);
-    a_NC6b = k_NCm6/(EFG_GTP*k_NC6*k_NC7);    
-    a_NC7  = 1/k_NC7; 
-    a_NC8  = 1/k_NC8; 
-    a_NC9  = 1/k_NC9; 
-    a_NC10 = 1/k_NC10; 
-    a_NC11 = 1/k_NC11; 
-    
-    # Non cognate (NN)
-    a_NN2 = k_NN1/k_NNm1;
-    # initial selection
-    a_init_selec = (1/k_WC1) * ( (k_WCm1+k_WC2)*(k_WC3+k_WCm2)/(k_WC3*k_WC2) - (k_WCm2/k_WC3) );
+    a_NC6b = k_NCm6/(EFG_GTP*k_NC6*k_NC7); 
+	
+	c_T3 = u[tags.idx.a1t : tags.idx.y1t];
+
+	WC = tags.dyn_eff.T_WC * c_T3;
+	WB = tags.dyn_eff.T_WB * c_T3;
+	NC = tags.dyn_eff.T_NC * c_T3;
+	NN = tags.dyn_eff.T_NN * c_T3;
+
     # cognate WC term
-    a_WC = (1+k_WCrej/k_WC5)*(a_init_selec .+ a_WC2*WC + a_WC3*WC + a_WC4*WC) + (a_WC5+a_WC6f+a_WC6b+a_WC7+a_WC8+a_WC9+a_WC10+a_WC11)*WC;
+    a_WC = (1+k_WCrej/k_WC5)*(a_init_selec .+ a_WC2.*WC .+ a_WC3.*WC .+ a_WC4.*WC) + (a_WC5+a_WC6f+a_WC6b+a_WC7+a_WC8+a_WC9+a_WC10+a_WC11).*WC;
     # competition term   
-    a_comp = a_init_selec * (1+k_WCrej/k_WC5) * (a_NN2*NN + (a_NC2+a_NC3+a_NC4+a_NC5)*NC + (a_WB2+a_WB3+a_WB4+a_WB5)*WB );
+    a_comp = a_init_selec * (1+k_WCrej/k_WC5) * (a_NN2.*NN .+ (a_NC2+a_NC3+a_NC4+a_NC5).*NC .+ (a_WB2+a_WB3+a_WB4+a_WB5).*WB );
     # WB incorporation
-    a_WB_inc = k_WB5 * a_WB5 * (a_WB6f+a_WB6b+a_WB7+a_WB8+a_WB9+a_WB10+a_WB11) * WB;
+    a_WB_inc = k_WB5 * a_WB5 * (a_WB6f+a_WB6b+a_WB7+a_WB8+a_WB9+a_WB10+a_WB11) .* WB;
     # mis-incorporation
-    a_mis_inc = k_NC5 * a_NC5 * (a_NC6f+a_NC6b+a_NC7+a_NC8+a_NC9+a_NC10+a_NC11) * NC;
+    a_mis_inc = k_NC5 * a_NC5 * (a_NC6f+a_NC6b+a_NC7+a_NC8+a_NC9+a_NC10+a_NC11) .* NC;
    
     ## final equation
-    k_eff = ( WC +  k_WB5*a_WB5*WB*a_init_selec*(1+k_WCrej/k_WC5) + k_NC5*a_NC5*NC*a_init_selec*(1+k_WCrej/k_WC5) )./ ( a_comp + a_WC + a_init_selec*(1+k_WCrej/k_WC5).*(a_WB_inc-a_mis_inc) );
+	scale = a_init_selec*(1+k_WCrej/k_WC5)
+    k_eff = ( WC .+  k_WB5*a_WB5.*WB.*scale + k_NC5*a_NC5.*NC.*scale )./ ( a_comp + a_WC + scale.*(a_WB_inc-a_mis_inc) );
 
     return k_eff
 end   
@@ -853,33 +818,37 @@ end
 """
 function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict)
 
-	local_tags_list = Vector{txtl_types.data_struct}()
+	local_tags_list = Vector{txtl_types.data_struct_integration}()
 
 	for (i, seq_name) in enumerate(seq_names)
-		
 
-
-		# local_tags 		= deepcopy(tags)
 		
 		sequence 		= seqs[seq_name].Codon
-		sequence_name 	= seq_name
 
 		# Additional tags for model species 
-		species 		= ["RNA"* string(i),"S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
-		Tags 	= [strip(s) for s in vcat(tags.Tag[1:end-5],species)] 
+		species = ["RNA"* string(i),"S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
+		Tags 	= [strip(s) for s in vcat(tags.species_and_sequences.Tag[1:end-5],species)] 
 		
 		# Arrays necessary for elongation
-		alpha_struc_generation!(sequence)
-		N_generation!(local_tags)
-		tRNAcharging!(local_tags)
-		sum_of_t3complex!(local_tags)
+		alpha_struc 	= alpha_struc_generation(tags)
+		matrix_N 		= N_generation(tags)
+		tRNA_charg 		= tRNAcharging(tags)
+		t3_Codon_struc 	= sum_of_t3complex(tags)
 		
 		# Efficiency factors
-		local_tags.efac_pos_aa 		= efac_pos_aa_dict[local_tags.sequence_name]
-		local_tags.efac_int_sd 	    = efac_int_sd_dict[local_tags.sequence_name]
+		efac_pos_aa 		= efac_pos_aa_dict[seq_name]
+		efac_int_sd 	    = efac_int_sd_dict[seq_name]
 
+		species_and_seqs	= txtl_types.species_and_sequences(tags.species_and_sequences.seq_names, tags.species_and_sequences.no_of_seqs, tags.species_and_sequences.µ, 
+		tags.species_and_sequences.avail_rib, tags.species_and_sequences.Tag, sequence, tags.species_and_sequences.Tagcell, tags.species_and_sequences.Name, tags.species_and_sequences.cod, 
+		tags.species_and_sequences.efac, tags.species_and_sequences.as, tags.species_and_sequences.tRNAs, tags.species_and_sequences.codAS, tags.species_and_sequences.t3tRNA, tags.species_and_sequences.AA, 
+		tags.species_and_sequences.Tag_constant_vars, tags.species_and_sequences.no_of_tRNAs, tags.species_and_sequences.no_of_variables)
 
-		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, tags.species_and_sequences, tags.flags, tags.dyn_eff, tags.init_c, tags.p_met, tags.p_seq, sequence, sequence_name, Tags)
+		idx_first_codon = length(Tags)+1
+		
+		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff, 
+																tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name, Tags, alpha_struc, 
+																matrix_N, tRNA_charg, t3_Codon_struc, efac_pos_aa, efac_int_sd, seq_names, idx_first_codon)
 
 		push!(local_tags_list, local_tags)
 	end
@@ -889,7 +858,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 end
 
 
-function alpha_struc_generation!(tags)
+function alpha_struc_generation(tags)
 
 	# generate matrix to calculate the consumption of aa-tRNA concentration (dependent on codon and c_aa-tRNA)
 
@@ -915,7 +884,7 @@ function alpha_struc_generation!(tags)
 	# for codon j 
 
 	# Generate zero matrix with the tRNAs in the rows and the codons in the columns
-	alpha_struc = zeros(tags.species_and_sequences.no_of_tRNAs,length(tags.Seq)-1)
+	alpha_struc = zeros(tags.species_and_sequences.no_of_tRNAs,length(tags.species_and_sequences.Seq)-1)
 
 	# For every tRNA get every cognate codon
 	str_cod = fill("", length(tags.species_and_sequences.codAS), 3)
@@ -930,7 +899,7 @@ function alpha_struc_generation!(tags)
 	# if the codonsequence fits with the codon (that can be bound by a specific
 	# t3-complex) the codon gets the value one
 	# Array with codons of gene sequence 
-	strCodon = sequence[1:end-1]
+	strCodon = tags.species_and_sequences.Seq[1:end-1]
 	for t in 1:tags.species_and_sequences.no_of_tRNAs # tRNAas
 		for j = 1:size(strCodon, 1) # codons of the sequence 
 			for m = 1:size(str_cod,2) # cognate codons of tRNAs
@@ -943,14 +912,14 @@ function alpha_struc_generation!(tags)
 
 	# Extension of alpha_struc with zeros to get the same dimension as N
 	# (N= matrix of loaded tRNA per Codon)
-	O = zeros(size((tags.species_and_sequences.Name),1)-tags.species_and_sequences.no_of_tRNAs, length(sequence)-1)
+	O = zeros(size((tags.species_and_sequences.Name),1)-tags.species_and_sequences.no_of_tRNAs, length(tags.species_and_sequences.Seq)-1)
 	alpha_struc = vcat(O, alpha_struc)
 
-	tags.alpha_struc = alpha_struc
+	return alpha_struc
 
 end
 
-function N_generation!(tags)
+function N_generation(tags)
 
 	# Function   : generation of N
 	# Written by : Maike Kuschel
@@ -965,21 +934,21 @@ function N_generation!(tags)
 	# generates only entries in matrix_N, if the codons fit with the
 	# sequence)
 
-	matrix_N = zeros(length(tags.Seq)-1, size(tags.cod,1)-1)
+	matrix_N = zeros(length(tags.species_and_sequences.Seq)-1, size(tags.species_and_sequences.cod,1)-1)
 
-	for i = 1:size(tags.Seq,1)-1
-		for j = 1:size(tags.cod,1)-1
-			if String(tags.Seq[i]) == tags.cod[j]
+	for i = 1:size(tags.species_and_sequences.Seq,1)-1
+		for j = 1:size(tags.species_and_sequences.cod,1)-1
+			if String(tags.species_and_sequences.Seq[i]) == tags.species_and_sequences.cod[j]
 				matrix_N[i,j] = 1
 			end
 		end
 	end
 	
-	tags.matrix_N = matrix_N
+	return matrix_N
     
 end
 
-function tRNAcharging!(tags)
+function tRNAcharging(tags)
 
 	# Function   : generation V_ARS for tRNA charging
 	# Written by : Maike Kuschel
@@ -991,11 +960,11 @@ function tRNAcharging!(tags)
 	# tRNA_charg is generated to combine the amino acids with the correct tRNA
 	# molecule
 
-	tRNA_charg = zeros(size(tags.AA,1),size(tags.as,1));
-	for t = 1 :size(tags.AA,1)
-		for j = 1:size(tags.as, 1)
-				if tags.AA[t] == tags.as[j]       #compares amino acid tag with the tag of tRNA, if they fit write 1                  
-					tRNA_charg[t,j] = 1;                         #(see excel file, vector tags.as contains all tRNA in form of the correct aa) 
+	tRNA_charg = zeros(size(tags.species_and_sequences.AA,1),size(tags.species_and_sequences.as,1));
+	for t = 1 :size(tags.species_and_sequences.AA,1)
+		for j = 1:size(tags.species_and_sequences.as, 1)
+				if tags.species_and_sequences.AA[t] == tags.species_and_sequences.as[j]       #compares amino acid tag with the tag of tRNA, if they fit write 1                  
+					tRNA_charg[t,j] = 1;          #(see excel file, vector tags.as contains all tRNA in form of the correct aa) 
 				end
 		end
 	end
@@ -1009,10 +978,10 @@ function tRNAcharging!(tags)
 	O = zeros(20,tags.idx.b1t) 
 	temp_tRNA_charg = hcat(O,tRNA_charg)
 	tRNA_charg = vcat(P,temp_tRNA_charg)
-	tags.tRNA_charg = tRNA_charg
+	return tRNA_charg
 end
 
-function sum_of_t3complex!(tags)
+function sum_of_t3complex(tags)
 
 	# Function   : generation t3_Codon_struc
 	# Written by : Maike Kuschel
@@ -1024,24 +993,24 @@ function sum_of_t3complex!(tags)
 	# t3_Codon_struc is generated to combine the codons with the correct t3
 	# complex
 
-	sum_t3comp_temp = fill("", length(tags.t3tRNA), 3);
-	for i = 1:size(tags.t3tRNA,1)                       # t3tRNA = vector (see excel file sheet t3 comp),  which combines the ternary complexes with the correct codon												
-		t3tRNA_temp = split(tags.t3tRNA[i], ',');     	# divides the cell
+	sum_t3comp_temp = fill("", length(tags.species_and_sequences.t3tRNA), 3);
+	for i = 1:size(tags.species_and_sequences.t3tRNA,1)                       # t3tRNA = vector (see excel file sheet t3 comp),  which combines the ternary complexes with the correct codon												
+		t3tRNA_temp = split(tags.species_and_sequences.t3tRNA[i], ',');     	# divides the cell
 		sum_t3comp_temp[i,1:length(t3tRNA_temp)] = t3tRNA_temp;
 	end
 	# Preallocation of the array t3_Codon_struc
-	t3_Codon_struc = zeros(size(sum_t3comp_temp,1),size(tags.Tagcell,1));
+	t3_Codon_struc = zeros(size(sum_t3comp_temp,1),size(tags.species_and_sequences.Tagcell,1));
 	for i=1:size(sum_t3comp_temp,1)
 		for j=1:size(sum_t3comp_temp,2)
-			for k=1:size(tags.Tagcell,1)        
-				if sum_t3comp_temp[i,j] == tags.Tagcell[k]		    #compares the tags in sum_t3comp_temp with 
+			for k=1:size(tags.species_and_sequences.Tagcell,1)        
+				if sum_t3comp_temp[i,j] == tags.species_and_sequences.Tagcell[k]		    #compares the tags in sum_t3comp_temp with 
 					t3_Codon_struc[i,k] = 1.0;                      #Tagcell(=contains tags of all metabolites 
 				end                                                 #of the initial vector), writes an array 
 			end                                                     #if tag of ternary complex in sum_t3comp_temp
 		end                                                         #fits with Tagcell--> write 1 
 	end  
 
-	tags.t3_Codon_struc = t3_Codon_struc                                                             
+	return t3_Codon_struc                                                             
 end
 
 """
@@ -1069,17 +1038,15 @@ end
 # 3. Define the ODE function for solving (distributed, focused on derivatives)
 function ODE_parallel_distributed!(du, u, p, t)
 
-    local_tags_list = p[1]				# Extraction of local_tags_list from p
-    seq_names       = p[2]
-    seqs            = p[3]
+    local_tags_list = p				# Extraction of local_tags_list from p
     tags            = local_tags_list[1]
 
-    n_metab = length(tags.Tag) -5 		# number of metabolites in the shared pool that is used by all sequences 
+    n_metab = length(tags.species_and_sequences.Tag) -5 		# number of metabolites in the shared pool that is used by all sequences 
 
     @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
     idx = n_metab						# Index of last pool species
    
-    y_codons_lengths = Int[length(seqs[seq_name].Codon) + 4 for seq_name in seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
+    y_codons_lengths = Int[length(tags.species_and_sequences.Seq) + 4 for seq_name in tags.seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
 
     y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
     idx = n_metab
@@ -1089,13 +1056,13 @@ function ODE_parallel_distributed!(du, u, p, t)
     end
 
     
-    n_seq = tags.no_of_seqs 		# save number of sequences
+    n_seq = tags.species_and_sequences.no_of_seqs 		# save number of sequences
     du_metab_all = [zeros(n_metab) for _ in 1:n_seq]	# List to store a du vector for the metabolite pool for every sequence 
     du_codons = Vector{Vector{Float64}}(undef, n_seq)	# List to store a du vector for the codons for every sequence 
 
     # Distributed parallelization of per-sequence rate calculations
     results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
-        local_tags = deepcopy(local_tags_list[i])		# Extraction of local tags
+        local_tags = local_tags_list[i]		# Extraction of local tags
         u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
         du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
         ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems

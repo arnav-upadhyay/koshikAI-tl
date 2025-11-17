@@ -10,29 +10,34 @@ function rhs_sequence!(du, u, p)
     # du = zeros(Float64, length(u))
     tags = p
     # Unpack parameters 
-    k_cat_Pol, k_D, C_RNP, V_TCmax, K_M_D, C_RNE, k_cat_E, K_M_deg, k_TLEmaxj, KM_T3j, KM_EFGGTP, KM_RK, KM_RF3GTP, k_RF1_diss_GTP, k_RF3_diss_GDP, k_GTP_hydr, k_RF1_ass, k_RF3_GDP_ass, k_RF3_GTP_ass, k_RF3_GDP_diss, k_RF3_GTP_diss, A1, A2, A3, A4, A5, k_cat_K_M_G1, k_cat_K_M_G2, k_RRF, q_RRF, one_q_G2_k_split, k_TE = tags.p_seq
-
+    @unpack µ, k_proc, k_cat_Pol, C_RNP, V_TCmax, K_M_D, k_cat_E, C_RNE, V_degmax, K_M_deg, k_D, n_DNA_t, n_DNA_s = tags.p_seq.TX
+    @unpack k_TLEmaxj, KM_T3j, KM_EFGGTP = tags.p_seq.EL
+    @unpack k_TE, KM_RK, KM_GTP, KM_RF3GTP, k_RF3_diss_GDP, k_RF1_diss_GTP, k_GTP_hydr, k_RF1_ass = tags.p_seq.TER
+    @unpack k_RF3_GDP_ass, k_RF3_GTP_ass, k_RF3_GDP_diss, k_RF3_GTP_diss = tags.p_seq.RF3
+    @unpack A1, A2, A3, A4, A5, k_cat_K_M_G1, k_cat_K_M_G2, k_RRF, q_RRF, one_q_G2_k_split = tags.p_seq.PTC 
+ 
     # Unpack constant variables 
-    ATP, GTP, UTP, CTP, ADP, GDP, UDP, CDP, AMP, GMP, UMP, CMP, Eut, Est, RFt, RRF, Ala, Cys, Asp, Glu, Phe, Gly, His, Ile, Lys, Leu, Met, Asn, Pro, Gln, Arg, Ser, Thr, Val, Trp, Tyr, C_D = tags.constant_vars 
+    ATP, GTP, UTP, CTP, ADP, GDP, UDP, CDP, AMP, GMP, UMP, CMP, Eut, Est, RFt, RRF, Ala, Cys, 
+    Asp, Glu, Phe, Gly, His, Ile, Lys, Leu, Met, Asn, Pro, Gln, Arg, Ser, Thr, val, Trp, Tyr, C_D = tags.init_c.constant_vars 
 
     # Unpack dynamic variables 
-    S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC = u 
+    S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, 
+    tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, 
+    tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, 
+    r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC = u 
 
     # Containers 
-    num_species = length(tags.Name)
-    len_sequence = length(tags.Seq) # Codon length with stop codon
+    num_species = length(tags.species_and_sequences.Name)
+    len_sequence = length(tags.species_and_sequences.Seq) # Codon length with stop codon
 
     # Define RIB1
-    idx_first_codon = length(tags.Tag)+1
+    idx_first_codon = length(tags.Tags)+1
     rate_RIB        = zeros(Float64, len_sequence-1);
     c_RIB	 		= u[idx_first_codon:end]
 
     # Transcription -----------------
 
     # Free mRNA (RNA) levels are given by a starting value to implement mRNA concentrations from transcriptomics measurements
-
-    n_DNA_t = 1;
-    n_DNA_s = 1;
 
     # # # tQSSR model used in Spindler
 
@@ -75,19 +80,15 @@ function rhs_sequence!(du, u, p)
 
 
         # dynamic efficiency factor 
-    if tags.dynamic_efficiency == true
+    if tags.flags.dynamic_efficiency == true
 
-        c_T3 = u[tags.idx.a1t : tags.idx.y1t];
-        efac = zeros(Float64, 62,1); 
+        
+        # efac = zeros(Float64, 62,1); 
 
-        WC = tags.T_WC * c_T3;
-        WB = tags.T_WB * c_T3;
-        NC = tags.T_NC * c_T3;
-        NN = tags.T_NN * c_T3;
 
-        efac = dynEffficiencyCalculation(WC,WB,NC,NN,EGT);
 
-        tags.efac = efac
+        efac = dynEffficiencyCalculation(tags, EGT, u);
+
     end
         
 
@@ -107,13 +108,13 @@ function rhs_sequence!(du, u, p)
 
     for i in 1: len_sequence-2
 
-        j = findfirst(x -> x == String(tags.Seq[i+1]), tags.cod)
-        k = findfirst(x -> x == String(tags.Seq[i]), tags.cod)
+        j = findfirst(x -> x == String(tags.species_and_sequences.Seq[i+1]), tags.species_and_sequences.cod)
+        k = findfirst(x -> x == String(tags.species_and_sequences.Seq[i]), tags.species_and_sequences.cod)
 
         if c_Codon[j] == 0
             V_TL_EL[i+1] = 0;  
         else 
-            efficiency = tags.efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i]) ############### The indexing is was altered in comparison to the matlab model from i+1 to i. This is in agreement with the spindler paper and the descriptions in Arnold and Nieß. This is also how it is calculated in analyze_parallel_data.m.
+            efficiency = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i]) ############### The indexing is was altered in comparison to the matlab model from i+1 to i. This is in agreement with the spindler paper and the descriptions in Arnold and Nieß. This is also how it is calculated in analyze_parallel_data.m.
             V_TL_EL[i+1] =  q_R_elo[i] * k_TLEmaxj * c_RIB[i] *  efficiency /(1+ KM_T3j/c_Codon[j]+ KM_EFGGTP*EGT_inv); ########### Indexing of q_R_elo was altered from i+1 to i. Now its same as in analyze_paralle_data data and the description in Nieß paper.  
         end
 
@@ -220,7 +221,7 @@ function rhs_sequence!(du, u, p)
         rate_RIB[len_sequence-1] = rate_RIB[len_sequence-1] + V_TL_EL[end];
 
         # concentration of the unloaded tRNA
-        du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.no_of_tRNAs+1:end]
+        du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
 
         # concentration of the ternary-complex
         du[1: num_species] .+= - K_T3;

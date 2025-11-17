@@ -121,7 +121,10 @@ function parameters(initial_concentrations, species_and_seqs)
 
     k_D = 0.289     # 1/min
 
-    TX = txtl_types.transcription(µ, k_proc, k_cat_Pol, C_RNP, V_TCmax, K_M_D, k_cat_E, C_RNE, V_degmax, K_M_deg, k_D)
+    n_DNA_t = 1;
+    n_DNA_s = 1;
+
+    TX = txtl_types.transcription(µ, k_proc, k_cat_Pol, C_RNP, V_TCmax, K_M_D, k_cat_E, C_RNE, V_degmax, K_M_deg, k_D, n_DNA_t, n_DNA_s)
 
 
     # Translation 
@@ -184,5 +187,82 @@ function parameters(initial_concentrations, species_and_seqs)
 
     p_seq = txtl_types.parameters_sequence(TX, EL, TER, RF3, PTC)
 
-    return p_met, p_seq
+
+
+
+    # ------------------------------------- dynEffficiencyCalculation ------------------------------------------
+
+    ## kinetic parameters (k)
+ 
+    # WC                # WB                # NC                # NN
+    k_WC1  = 140;       k_WB1  = 140;       k_NC1  = 140;       k_NN1  = 140;   
+    k_WCm1 =  85;       k_WBm1 =  85;       k_NCm1 =  85;       k_NNm1 =  85;
+    k_WC2  = 190;       k_WB2  = 190;       k_NC2  = 190;      
+    k_WCm2 = 0.2;       k_WBm2 =   1;       k_NCm2 =  80;      
+    k_WC3  = 260;       k_WB3  =  25;       k_NC3  = 0.4;     
+    k_WC4  =  10;       k_WB4  =  10;       k_NC4  =  10;      
+    k_WC5  =  20;       k_WB5  = 1.6;       k_NC5  = 0.1;      
+    k_WCrej =0.1;       k_WBrej= 1.1;       k_NCrej=   6;     
+    k_WC6  = 150;       k_WB6  = 150;       k_NC6  = 150;      
+    k_WCm6 = 140;       k_WBm6 = 140;       k_NCm6 = 140;
+    k_WC7  = 100;       k_WB7  = 100;       k_NC7  = 100;
+    k_WC8  =  30;       k_WB8  =  30;       k_NC8  =  30;
+    k_WC9  = 500;       k_WB9  = 500;       k_NC9  = 500;
+    k_WC10 =   5;       k_WB10 =   5;       k_NC10 =   5;
+    k_WC11 =  20;       k_WB11 =  20;       k_NC11 =  20;
+   
+    ## alphas (a)
+   
+    # Cognate WC (WC)
+    a_WC2  = (k_WCm2+k_WC3)/(k_WC2*k_WC3);
+    a_WC3  = 1/k_WC3;  
+    a_WC4  = 1/k_WC4; 
+    a_WC5  = 1/k_WC5; 
+
+    a_WC7  = 1/k_WC7; 
+    a_WC8  = 1/k_WC8; 
+    a_WC9  = 1/k_WC9; 
+    a_WC10 = 1/k_WC10; 
+    a_WC11 = 1/k_WC11; 
+
+    WC = txtl_types.WC(a_WC2, a_WC3, a_WC4, a_WC5,a_WC7, a_WC8, a_WC9, a_WC10, a_WC11)
+    
+    # Cognate WB (WB)
+    a_WB2 = (k_WB1*(k_WB3+k_WBm2))/(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2);
+    a_WB3 =         (k_WB1*k_WB2)/(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2);
+    a_WB4 =   (k_WB3*k_WB1*k_WB2)/(k_WB4*(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2));
+    a_WB5 =   (k_WB3*k_WB1*k_WB2)/((k_WB5+k_WBrej)*(k_WB3*k_WBm1+k_WBm1*k_WBm2+k_WB3*k_WB2));
+    a_WB7  = 1/k_WB7; 
+    a_WB8  = 1/k_WB8; 
+    a_WB9  = 1/k_WB9; 
+    a_WB10 = 1/k_WB10; 
+    a_WB11 = 1/k_WB11; 
+
+    WB = txtl_types.WB(a_WB2, a_WB3, a_WB4, a_WB5, a_WB7, a_WB8, a_WB9, a_WB10, a_WB11)
+    
+    # Near-cognate (NC)
+    a_NC2 = (k_NC1*(k_NC3+k_NCm2))/(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2);
+    a_NC3 =        (k_NC1*k_NC2) /(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2);
+    a_NC4 =  (k_NC3*k_NC1*k_NC2) /(k_NC4*(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2));
+    a_NC5 =  (k_NC3*k_NC1*k_NC2) /((k_NC5+k_NCrej)*(k_NC3*k_NCm1+k_NCm1*k_NCm2+k_NC3*k_NC2));
+    a_NC7  = 1/k_NC7; 
+    a_NC8  = 1/k_NC8; 
+    a_NC9  = 1/k_NC9; 
+    a_NC10 = 1/k_NC10; 
+    a_NC11 = 1/k_NC11; 
+
+    NC = txtl_types.NC(a_NC2 , a_NC3 , a_NC4 , a_NC5 , a_NC7 , a_NC8 , a_NC9 , a_NC10, a_NC11)
+
+    EFG_GTP_dependent = txtl_types.EFG_GTP_dependent(k_WC6, k_WCm6, k_WC7, k_WB6, k_WBm6, k_WB7, k_NC6, k_NCm6, k_NC7)
+
+    # Non cognate (NN)
+    a_NN2 = k_NN1/k_NNm1;
+    # initial selection
+    a_init_selec = (1/k_WC1) * ( (k_WCm1+k_WC2)*(k_WC3+k_WCm2)/(k_WC3*k_WC2) - (k_WCm2/k_WC3) );
+
+    others = txtl_types.others(k_WC5, a_NN2, a_init_selec, k_WCrej, k_WB5, k_NC5)
+
+    p_dyn = txtl_types.parameters_dynamic_efficiency(others, WC, WB, NC, EFG_GTP_dependent)
+
+    return p_met, p_seq, p_dyn
 end
