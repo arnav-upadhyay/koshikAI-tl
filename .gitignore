@@ -7,7 +7,7 @@
 
 # ---- Ignore files ---------
 Manifest.toml
-main_copy.ipynb
+optimization_workflow.ipynb
 
 # --- Ignore build artifacts, caches, etc. ---
 *.jl.cov

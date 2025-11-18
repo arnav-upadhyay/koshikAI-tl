@@ -14,7 +14,7 @@ struct SequenceData
     Codon::Vector{LongRNA{2}}
 end
 
-mutable struct scale
+struct scale
     V_TC_scale       :: Float64
     k_TLEmaxj_scale  :: Float64
     V_IN_70SIC_scale :: Float64
@@ -184,7 +184,8 @@ struct species_and_sequences
 	µ::Float64
 	avail_rib::Float64
 	Tag::Vector{SubString{String}}
-	Seq::Vector{LongSequence{RNAAlphabet{2}}}
+	Seq::Vector{String}
+	# Seq::Vector{LongSequence{RNAAlphabet{2}}}
 	Tagcell::Vector{String}
 	Name::Vector{String}
 	cod::Vector{String}	
@@ -197,6 +198,7 @@ struct species_and_sequences
 	Tag_constant_vars::Vector{String}
 	no_of_tRNAs::Int32
 	no_of_variables::Int32
+	cod_idx::Dict{String, Int64}
 end
 
 # ------------------------------ efficiency_factor_initialization ------------------------------------------------------
@@ -452,79 +454,5 @@ struct data_struct_integration
 	idx_first_codon::Int32
 
 end
-
-# --------------------------------- data_struct ----------------------------------
-
-# mutable struct data_struct 
-#     organism::String
-#     no_of_tRNAs::Int32
-#     avail_rib::Float64
-#     scale::scale_struct
-#     no_of_seqs::Int32
-#     growth_rate::Float64
-
-#     Tag::Vector{String}
-#     Seq::Vector{LongSequence{RNAAlphabet{2}}}
-#     seq_names::Vector{String}
-#     Tagcell::Vector{String}
-#     Name::Vector{String}
-
-#     cod::Vector{String}
-#     efac::Vector{Float64}
-#     as::Vector{String}
-#     tRNAs::Vector{String}
-#     codAS::Vector{String}
-
-#     t3tRNA::Vector{String}
-#     AA::Vector{String}
-#     alpha_struc::Matrix{Float64}
-#     matrix_N::Matrix{Float64}
-#     tRNA_charg::Matrix{Float64}
-
-#     t3_Codon_struc::Matrix{Float64}
-#     c_ARS::Vector{Float64}
-#     c_TC::Vector{Float64}
-#     c_tot_EFG::Float64
-#     efac_pos_aa::Vector{Float64}
-
-#     efac_int_sd::Vector{Float64}
-#     hybridEnergies::Vector{Float64}
-
-#     T_WC::Matrix{Float64}
-#     T_WB::Matrix{Float64}
-#     T_NC::Matrix{Float64}
-#     T_NN::Matrix{Float64}
-#     dynamic_efficiency::Bool
-
-#     p_met::parameters_metabolites
-#     p_seq::parameters_sequence
-#     constant_vars::Vector{Float64}
-# 	idx::indices_dynamic_variables
-# 	no_of_variables::Int32
-
-# 	Tag_constant_vars::Vector{String}
-#     sequence_name::String
-
-# end
-
-# function init_data()
-#     return data_struct(
-#         "", 0, 0.0, init_scale(), 0, 0.0,
-#         String[], Vector{LongSequence{RNAAlphabet{2}}}(), String[], String[], String[],
-#         String[], Float64[], String[], String[], String[],
-#         String[], String[], zeros(0,0), zeros(0,0), zeros(0,0),
-#         zeros(0,0), Float64[], Float64[], 0.0, Float64[],
-#         Float64[], Float64[],
-#         zeros(0,0), zeros(0,0), zeros(0,0), zeros(0,0), true,
-#         Any[], Any[], Vector{Float64}(), indices, 0,
-#         Vector{String}(), ""
-#     )
-# end
-
-struct data_struct 
-
-
-end
-
 
 end # module

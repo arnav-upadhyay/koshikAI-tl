@@ -7,6 +7,7 @@
 function rhs_sequence!(du, u, p)
 
 
+
     # du = zeros(Float64, length(u))
     tags = p
     # Unpack parameters 
@@ -15,7 +16,7 @@ function rhs_sequence!(du, u, p)
     @unpack k_TE, KM_RK, KM_GTP, KM_RF3GTP, k_RF3_diss_GDP, k_RF1_diss_GTP, k_GTP_hydr, k_RF1_ass = tags.p_seq.TER
     @unpack k_RF3_GDP_ass, k_RF3_GTP_ass, k_RF3_GDP_diss, k_RF3_GTP_diss = tags.p_seq.RF3
     @unpack A1, A2, A3, A4, A5, k_cat_K_M_G1, k_cat_K_M_G2, k_RRF, q_RRF, one_q_G2_k_split = tags.p_seq.PTC 
- 
+    
     # Unpack constant variables 
     ATP, GTP, UTP, CTP, ADP, GDP, UDP, CDP, AMP, GMP, UMP, CMP, Eut, Est, RFt, RRF, Ala, Cys, 
     Asp, Glu, Phe, Gly, His, Ile, Lys, Leu, Met, Asn, Pro, Gln, Arg, Ser, Thr, val, Trp, Tyr, C_D = tags.init_c.constant_vars 
@@ -31,13 +32,14 @@ function rhs_sequence!(du, u, p)
     len_sequence = length(tags.species_and_sequences.Seq) # Codon length with stop codon
 
     # Define RIB1
-    idx_first_codon = length(tags.Tags)+1
+    
     rate_RIB        = zeros(Float64, len_sequence-1);
-    c_RIB	 		= u[idx_first_codon:end]
+    @views c_RIB	= u[tags.idx_first_codon:end]
 
     # Transcription -----------------
 
     # Free mRNA (RNA) levels are given by a starting value to implement mRNA concentrations from transcriptomics measurements
+
 
     # # # tQSSR model used in Spindler
 
@@ -55,11 +57,11 @@ function rhs_sequence!(du, u, p)
         which reduces the elongation rate with increasing ribosome density. For an elongation step from codon 
         j to j+1, the queuing factor corresponds to the density of ribosomes on  the 12 codons further downstream. =#         
 
-    total_RNA   = RNA + sum(c_RIB[1:12])
+    @views total_RNA   = RNA + sum(c_RIB[1:12])
 
     q_R_elo     = ones(len_sequence-1);
         
-    for i in 2:(len_sequence - 13)
+    @views for i in 2:(len_sequence - 13)
 
         if total_RNA-sum(c_RIB[i:i+12]) == 0
             q_R_elo[i] 	= 0;
@@ -70,7 +72,7 @@ function rhs_sequence!(du, u, p)
     end 
 
         
-    for i in (len_sequence-13) : (len_sequence-1)
+    @views for i in (len_sequence-13) : (len_sequence-1)
         if total_RNA - sum(c_RIB[i : end]) == 0
             q_R_elo[i] = 0
         else 
@@ -78,14 +80,8 @@ function rhs_sequence!(du, u, p)
         end
     end
 
-
         # dynamic efficiency factor 
     if tags.flags.dynamic_efficiency == true
-
-        
-        # efac = zeros(Float64, 62,1); 
-
-
 
         efac = dynEffficiencyCalculation(tags, EGT, u);
 
@@ -100,39 +96,47 @@ function rhs_sequence!(du, u, p)
 
     EGT_inv = inv(EGT)
 
-    # rna_free = u[170]
-    # s70_ini = u[171]
-    # # this calculation is done according to the analyze_parllel script and is fitting to the description in the Nieß paper
-    # q_R_elo[1] = 1 - (sum(c_RIB[1:12]) +s70_ini)/(rna_free+sum(c_RIB[1:12])) 
 
+    @inbounds for i in 1:len_sequence-2
 
-    for i in 1: len_sequence-2
+        cod_next = tags.species_and_sequences.Seq[i+1]
+        cod_curr = tags.species_and_sequences.Seq[i]
 
-        j = findfirst(x -> x == String(tags.species_and_sequences.Seq[i+1]), tags.species_and_sequences.cod)
-        k = findfirst(x -> x == String(tags.species_and_sequences.Seq[i]), tags.species_and_sequences.cod)
+        j = tags.species_and_sequences.cod_idx[cod_next]    # O(1) Lookup
+        k = tags.species_and_sequences.cod_idx[cod_curr]    # O(1) Lookup
 
-        if c_Codon[j] == 0
-            V_TL_EL[i+1] = 0;  
-        else 
-            efficiency = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i]) ############### The indexing is was altered in comparison to the matlab model from i+1 to i. This is in agreement with the spindler paper and the descriptions in Arnold and Nieß. This is also how it is calculated in analyze_parallel_data.m.
-            V_TL_EL[i+1] =  q_R_elo[i] * k_TLEmaxj * c_RIB[i] *  efficiency /(1+ KM_T3j/c_Codon[j]+ KM_EFGGTP*EGT_inv); ########### Indexing of q_R_elo was altered from i+1 to i. Now its same as in analyze_paralle_data data and the description in Nieß paper.  
+        cc = c_Codon[j]
+
+        if cc == 0
+            V_TL_EL[i+1] = 0
+        else
+            eff = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i])
+
+            denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
+
+            V_TL_EL[i+1] =
+                q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
         end
-
     end
-       
-    
-
-    # V_TL_EL     .= V_TL_EL .* q_R_elo; # original version that is like in the mod_seq matlab script
 
     V_TL_EL_sum = sum(V_TL_EL);
 
     c_codon_seq = tags.matrix_N * c_Codon
-    N = C_vect[1,:] * (1 ./c_codon_seq)';
+    N = C_vect[1,:] * (1 ./c_codon_seq)'
 
     # Replace Inf values with 0
-    N[isinf.(N)] .= 0
+    @inbounds for i in eachindex(N)
+        if isinf(N[i])
+            N[i] = 0
+        end
+    end
+
     # Replace NaN values with 0
-    N[isnan.(N)] .= 0
+    @inbounds for i in eachindex(N)
+        if isnan(N[i])
+            N[i] = 0
+        end
+    end
 
     M = zeros(size(N))
 
@@ -142,8 +146,8 @@ function rhs_sequence!(du, u, p)
         end
     end
 
-
     K_T3 = M*V_TL_EL;
+
 
     mtRNA 		= zeros(size(M,1),2);
     M_tRNA 		= hcat(mtRNA,M)
@@ -151,6 +155,10 @@ function rhs_sequence!(du, u, p)
     M_tRNA		= M_tRNA[:, 1:end-1]
 
     K_tRNA 		= M_tRNA*V_TL_EL   
+
+
+
+    ##########################################################
 
     ## translation termination
     te = len_sequence-1 # Number of last coding codon
@@ -189,14 +197,50 @@ function rhs_sequence!(du, u, p)
     k_rec_min = k_rec*60; # rate/min^-1 for recycling according to Borg et al. 2016
     f_s = k_cat_K_M_G1/(k_RRF * RRF)*(q_RRF/k_cat_K_M_G2*one_q_G2_k_split + EGT)+ one_q_G2_k_split; #EGT hydrolised per splitting event according to Borg et al 2016
         
-    ## translation termination - calculation of du 
-    tRNA_K = tags.alpha_struc[:,end] * V_TL_TE
+    ## translation termination
+    te = len_sequence-1 # Number of last coding codon
+    # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
 
-    du[1:num_species] .+= tRNA_K;
+    k_RF1_diss_GTP = k_RF1_diss_GTP#*tags.scale.termination
 
-    rate_RIB[len_sequence-1] += - V_TL_TE
+    efficiency_term = 1;
+    k_ter_RF1 = 1 / ( 1/(k_RF1_ass*RFt) + 1/(k_RF1_diss_GTP) );
+    k_ter_RF3 = 1 / ( 1/(k_RF1_ass*RGT) + 1/(k_RF3_diss_GDP) + 1/(k_GTP_hydr) );
 
-    ######### !!!!!!!!!!! Indexing of output variables needs to be adjusted to single sequence ??????????????? Or is it????????????
+    if k_ter_RF1 < k_ter_RF3
+        k_ter = k_ter_RF1;
+    else
+        k_ter = k_ter_RF3;
+    end
+
+
+    V_TE_max = k_ter * RFt   # RFt is RF1/2 total
+    V_TL_TE = V_TE_max * efficiency_term / (1 + KM_RK/ c_RIB[te] + KM_RF3GTP/RGT + KM_RK * KM_RF3GTP /(c_RIB[te] * RGT))
+        
+    if c_RIB[te] == 0 || GTP == 0
+        V_TL_TE=0;
+    end
+
+    V_RF3_GDP_ass  = k_RF3_GDP_ass  * RF3 * GDP;
+    V_RF3_GTP_ass  = k_RF3_GTP_ass  * RF3 * GTP;
+    V_RF3_GDP_diss = k_RF3_GDP_diss * RGD;
+    V_RF3_GTP_diss = k_RF3_GTP_diss * RGT 
+
+    ## post termination complex recycling
+    t_rec = A1 + A2 * 1/RRF + A3 * EGT/RRF + A4 * 1/EGT + A5 * 1/(RRF*EGT); # time/s for recycling according to Borg et al. 2016
+    k_rec = 1/t_rec; # rate/s^-1 for recycling according to Borg et al. 2016
+    k_rec_min = k_rec*60; # rate/min^-1 for recycling according to Borg et al. 2016
+    f_s = k_cat_K_M_G1/(k_RRF * RRF)*(q_RRF/k_cat_K_M_G2*one_q_G2_k_split + EGT)+ one_q_G2_k_split; #EGT hydrolised per splitting event according to Borg et al 2016
+
+    # translation termination - calculation of du 
+
+    @inbounds for i in 1:num_species
+        du[i] += tags.alpha_struc[i, end] * V_TL_TE
+    end
+
+    rate_RIB[len_sequence-1] -= V_TL_TE
+
+
     du[tags.idx.PTC] += V_TL_TE - k_rec_min * PTC;	            # PTC
     du[tags.idx.S30] += k_rec_min * PTC;                         # rate of 30S release due to recycling
     du[tags.idx.S50] +=  k_rec_min * PTC;                        # rate of 50S release due to recycling
@@ -204,6 +248,7 @@ function rhs_sequence!(du, u, p)
     du[tags.idx.RGT] = -V_TL_TE -V_RF3_GTP_diss +V_RF3_GTP_ass;  # rate of RGT
     du[tags.idx.RGD] =  V_TL_TE -V_RF3_GDP_diss +V_RF3_GDP_ass;  # rate of RGD
     du[tags.idx.RF3] =          +V_RF3_GDP_diss +V_RF3_GTP_diss -V_RF3_GTP_ass -V_RF3_GDP_ass; # rate of RF3
+
 
     # translation elongation - calculation of du 
 
@@ -233,7 +278,8 @@ function rhs_sequence!(du, u, p)
     end
 
     # save RIB in du
-    du[idx_first_codon:end] .+= rate_RIB;
+    du[tags.idx_first_codon:end] .+= rate_RIB;
 
     return du
 end
+

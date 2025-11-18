@@ -53,7 +53,7 @@ function species_and_sequences(µ, sequence_file, hybrid_file)
 	species 		= ["RNA","S70","rna","PRT","PTC"]
 	Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
 	
-	Seq 		= seqs[seq_names[1]].Codon
+	Seq 		= String.(seqs[seq_names[1]].Codon)
 	Tagcell 	= metab.Tag
 	Name 		= metab.Name
 	cod 		= map(strip,codon_conc.cod)
@@ -72,7 +72,15 @@ function species_and_sequences(µ, sequence_file, hybrid_file)
 
 	# indices_dictionary!(tags)
 
-	species_and_seqs = txtl_types.species_and_sequences(seq_names, no_of_seqs, µ, avail_rib, Tag, Seq, Tagcell, Name, cod, efac, as, tRNAs, codAS, t3tRNA, AA, Tag_constant_vars, no_of_tRNAs, no_of_variables)
+	# Codon lookup table for V_TL_EL 
+
+	cod_index = Dict{String,Int}()
+	for i in eachindex(cod)
+		cod_index[cod[i]] = i
+	end
+
+	species_and_seqs = txtl_types.species_and_sequences(seq_names, no_of_seqs, µ, avail_rib, Tag, Seq, Tagcell, Name, cod, efac, as, 
+														tRNAs, codAS, t3tRNA, AA, Tag_constant_vars, no_of_tRNAs, no_of_variables, cod_index)
 
 	return seqs, seq_names, hyb_file_dict, species_and_seqs, idx
 end
@@ -426,7 +434,7 @@ function dynEffficiencyCalculation(tags, EFG_GTP, u)
 
 	@unpack k_WC6, k_WCm6, k_WC7, k_WB6, k_WBm6, k_WB7, k_NC6, k_NCm6, k_NC7 = tags.p_dyn.EFG_GTP
 
-	# GTP dependent 
+    # GTP dependent 
 	a_WC6f = 1/(EFG_GTP*k_WC6);
     a_WC6b = k_WCm6/(EFG_GTP*k_WC6*k_WC7);
 
@@ -436,25 +444,64 @@ function dynEffficiencyCalculation(tags, EFG_GTP, u)
     a_NC6f = 1/(EFG_GTP*k_NC6);
     a_NC6b = k_NCm6/(EFG_GTP*k_NC6*k_NC7); 
 	
-	c_T3 = u[tags.idx.a1t : tags.idx.y1t];
+	@views c_T3 = u[tags.idx.a1t : tags.idx.y1t];
 
 	WC = tags.dyn_eff.T_WC * c_T3;
 	WB = tags.dyn_eff.T_WB * c_T3;
 	NC = tags.dyn_eff.T_NC * c_T3;
 	NN = tags.dyn_eff.T_NN * c_T3;
 
+    # Preallocate arrays 
+    a_WC = zeros(62)
+    a_comp = zeros(62)
+    a_WB_inc = zeros(62)
+    k_eff = zeros(62)
+
     # cognate WC term
-    a_WC = (1+k_WCrej/k_WC5)*(a_init_selec .+ a_WC2.*WC .+ a_WC3.*WC .+ a_WC4.*WC) + (a_WC5+a_WC6f+a_WC6b+a_WC7+a_WC8+a_WC9+a_WC10+a_WC11).*WC;
-    # competition term   
-    a_comp = a_init_selec * (1+k_WCrej/k_WC5) * (a_NN2.*NN .+ (a_NC2+a_NC3+a_NC4+a_NC5).*NC .+ (a_WB2+a_WB3+a_WB4+a_WB5).*WB );
-    # WB incorporation
-    a_WB_inc = k_WB5 * a_WB5 * (a_WB6f+a_WB6b+a_WB7+a_WB8+a_WB9+a_WB10+a_WB11) .* WB;
+    @inbounds for i in eachindex(a_WC)
+    a_WC[i] =
+        (1 + k_WCrej/k_WC5) * (
+            a_init_selec +
+            (a_WC2 + a_WC3 + a_WC4) * WC[i]
+        ) +
+        (a_WC5 + a_WC6f + a_WC6b + a_WC7 + a_WC8 + a_WC9 + a_WC10 + a_WC11) * WC[i]
+    end 
+
+    # # competition term   
+    scale = a_init_selec * (1 + k_WCrej/k_WC5)
+    sum_NC = a_NC2 + a_NC3 + a_NC4 + a_NC5
+    sum_WB = a_WB2 + a_WB3 + a_WB4 + a_WB5
+
+    @inbounds for i in eachindex(a_comp)
+        a_comp[i] = scale * (
+            a_NN2 * NN[i] +
+            sum_NC * NC[i] +
+            sum_WB * WB[i]
+        )
+    end
+
+    # # WB incorporation
+    coeff = k_WB5 * a_WB5 * (a_WB6f + a_WB6b + a_WB7 + a_WB8 + a_WB9 + a_WB10 + a_WB11)
+
+    @inbounds for i in eachindex(a_WB_inc)
+        a_WB_inc[i] = coeff * WB[i]
+    end
+
     # mis-incorporation
     a_mis_inc = k_NC5 * a_NC5 * (a_NC6f+a_NC6b+a_NC7+a_NC8+a_NC9+a_NC10+a_NC11) .* NC;
    
-    ## final equation
-	scale = a_init_selec*(1+k_WCrej/k_WC5)
-    k_eff = ( WC .+  k_WB5*a_WB5.*WB.*scale + k_NC5*a_NC5.*NC.*scale )./ ( a_comp + a_WC + scale.*(a_WB_inc-a_mis_inc) );
+    # ## final equation
+    @inbounds for i in eachindex(k_eff)
+        num = WC[i] +
+            k_WB5 * a_WB5 * WB[i] * scale +
+            k_NC5 * a_NC5 * NC[i] * scale
+
+        den = a_comp[i] +
+            a_WC[i] +
+            scale * (a_WB_inc[i] - a_mis_inc[i])
+
+        k_eff[i] = num / den
+    end
 
     return k_eff
 end   
@@ -621,6 +668,132 @@ end
 
 #------------------------ preintegration -------------------------------------------------
 
+# long_met_rhs_01
+# like: MOD_met_rhs.m 
+# Start: 13.03.2025
+# By: Cedric Meyer 
+# Purpose: ODE system of the metabolite module, long form without the loops 
+
+# function ODE_met_long(du, u, p::data_struct, t)
+
+# Can mod_met_rhs and mod_seq_rhs be combined so that du can be directly saved into du?
+
+function rhs_metabolites_preintegration!(du, u, p)
+
+
+	# du =zeros(Float64, length(u))
+	tags = p
+
+	# Unpack parameters
+	# @unpack q_RBS, k_IN_70SIC, KM_mRNA, KM_50S, k_IN_IF2D, k_on_30S_IF3, k_off_30SIF3, k_on_30SIF3_IF1, k_off_30SIF3IF1, k_on_30SIF3_IF2, k_off_30SIF3IF2, k_on_30SIF3IF1_IF2, k_off_30SIF3IF1IF2, k_on_30SIF3IF2_IF1, k_off_30SIF3IF2IF1, k_on_30SIF123_fMet, k_off_30SIF123fMet, k_EFGGDP_Diss, k_EFG_GDP_Ass, k_EFG_GTP_Ass, k_EFGGTP_Diss, k_EFTsf, k_EFTsr, Keq_EFTu, KM_GTP, KM_GDP, KM_EFTuGDP, KM_EFTuGTP, Ki_EFTuGDP, Ki_EFTuGTP, c_EFG_t, k_cat, KM_ARS_tRNA, KM_ARS_aa, KM_ARS_ATP, k_T3j_f, k_T3j_d = tags.p_met
+
+	@unpack k_IN_70SIC, KM_mRNA, KM_50S, k_IN_IF2D, k_on_30S_IF3, k_off_30SIF3, k_on_30SIF3_IF1, k_off_30SIF3IF1, k_on_30SIF3_IF2, k_off_30SIF3IF2, k_on_30SIF3IF1_IF2, k_off_30SIF3IF1IF2, k_on_30SIF3IF2_IF1, k_off_30SIF3IF2IF1, k_on_30SIF123_fMet, k_off_30SIF123fMet = tags.p_met.IN
+	@unpack k_EFGGDP_Diss, k_EFG_GDP_Ass, k_EFG_GTP_Ass, k_EFGGTP_Diss, k_EFTsf, k_EFTsr, Keq_EFTu, KM_GTP, KM_GDP, KM_EFTuGDP, KM_EFTuGTP, Ki_EFTuGDP, Ki_EFTuGTP, c_EFG_t = tags.p_met.EF
+	@unpack k_cat, KM_ARS_tRNA, KM_ARS_aa, KM_ARS_ATP = tags_pre.p_met.tRNA
+	@unpack k_T3j_f, k_T3j_d = tags_pre.p_met.t3 
+	q_RBS = tags_pre.p_met.q_RBS
+
+	# Unpack constant variables 
+	ATP, GTP, UTP, CTP, ADP, GDP, UDP, CDP, AMP, GMP, UMP, CMP, Eut, Est, RFt, RRF, Ala, Cys, Asp, Glu, Phe, Gly, His, Ile, Lys, Leu, Met, Asn, Pro, Gln, Arg, Ser, Thr, val, Trp, Tyr, C_D = tags.init_c.constant_vars
+
+	# Unpack dynamic variables 
+	S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC, RIB1 = u 
+
+	# Precompute inverse values (division is slow)
+	inv_ATP = 1/ATP
+
+	inv_Ala = 1/Ala 
+	inv_Cys = 1/Cys
+	inv_Asp = 1/Asp
+	inv_Glu = 1/Glu
+	inv_Phe = 1/Phe
+	inv_Gly = 1/Gly
+	inv_His = 1/His
+	inv_Ile = 1/Ile
+	inv_Lys = 1/Lys
+	inv_Leu = 1/Leu
+	inv_Met = 1/Met
+	inv_Asn = 1/Asn
+	inv_Pro = 1/Pro
+	inv_Gln = 1/Gln
+	inv_Arg = 1/Arg
+	inv_Ser = 1/Ser
+	inv_Thr = 1/Thr
+	inv_Val = 1/val
+	inv_Trp = 1/Trp
+	inv_Tyr = 1/Tyr
+
+	# Define RIB1
+	idx_first_codon = length(tags.species_and_sequences.Tag)+1
+	@views c_RIB	 = u[idx_first_codon:end];
+
+	# ODEs ####################################################################################
+
+	if RNA <= 1e-8
+		q_RBS = 0
+	else 
+		q_RBS = 1 - sum(c_RIB[1:12].+S70) / (RNA + sum(c_RIB[1:12])) 
+	end
+
+
+	# Initiation ###########################################
+
+	V_IN_IF2D 		= k_IN_IF2D * S70 * tags.scale.V_IN_IF2D_scale
+
+	V_IN_70SIC_max  = k_IN_70SIC * PIC * tags.scale.V_IN_70SIC_scale
+
+	V_IN_70SIC 		= ((V_IN_70SIC_max)/  ( 1+(KM_mRNA/RNA+(KM_50S/S50)) ).* q_RBS)  # Here is a big difference between Spindler and Nieß model, Investigate!!!!!!!!!!!!!!!
+
+
+	du[tags.idx.S30] = - k_on_30S_IF3*S30*IF3 + k_off_30SIF3*SC1 # 13
+	du[tags.idx.S50] = - V_IN_70SIC # 14
+	du[tags.idx.IF1] = - k_on_30SIF3_IF1*SC1*IF1    + k_off_30SIF3IF1*SC2 - k_on_30SIF3IF2_IF1*SC3*IF1 + k_off_30SIF3IF2IF1*SC4 + V_IN_IF2D # 15
+	du[tags.idx.IF2] = - k_on_30SIF3_IF2*SC1*IF2    + k_off_30SIF3IF2*SC3 - k_on_30SIF3IF1_IF2*SC2*IF2 + k_off_30SIF3IF1IF2*SC4 + V_IN_IF2D# 16
+	du[tags.idx.IF3] = - k_on_30S_IF3*S30*IF3 + k_off_30SIF3*SC1 + V_IN_IF2D # 17
+	du[tags.idx.SC1] = + k_on_30S_IF3*S30*IF3 - k_off_30SIF3*SC1 + k_off_30SIF3IF1*SC2  - k_on_30SIF3_IF1*SC1*IF1 + k_off_30SIF3IF2*SC3    - k_on_30SIF3_IF2*SC1*IF2 #18
+	du[tags.idx.SC2] = + k_on_30SIF3_IF1*SC1*IF1 - k_off_30SIF3IF1*SC2 + k_off_30SIF3IF1IF2*SC4    - k_on_30SIF3IF1_IF2*SC2*IF2 # 19
+	du[tags.idx.SC3] = + k_on_30SIF3_IF2*SC1*IF2 - k_off_30SIF3IF2*SC3 + k_off_30SIF3IF2IF1*SC4    - k_on_30SIF3IF2_IF1*SC3*IF1 # 20
+	du[tags.idx.SC4] = + k_off_30SIF123fMet*PIC       - k_on_30SIF123_fMet*SC4*b1t + k_on_30SIF3IF1_IF2*SC2*IF2 - k_off_30SIF3IF1IF2*SC4 + k_on_30SIF3IF2_IF1*SC3*IF1 - k_off_30SIF3IF2IF1*SC4 # 21
+	du[tags.idx.PIC] =  + k_on_30SIF123_fMet*SC4*b1t - k_off_30SIF123fMet*PIC - (((k_IN_70SIC * PIC)/ ( 1+(KM_mRNA/RNA+(KM_50S/S50)) )) .* q_RBS) # 22 30S PIC
+	du[tags.idx.b1t] = + k_off_30SIF123fMet*PIC - k_on_30SIF123_fMet*SC4*b1t + V_IN_IF2D # 35, db1t
+	du[tags.idx.RNA] = - V_IN_70SIC # 170, dRNA
+	du[tags.idx.S70] = V_IN_70SIC - V_IN_IF2D # 171, dS70
+	du[tags.idx.rna] = V_IN_70SIC # 172, drna
+
+	du[idx_first_codon] = V_IN_IF2D # 175, dRIB
+
+    du[tags.idx.ta1:tags.idx.ty1] .= 0
+    du[tags.idx.tA1:tags.idx.tY1] .= 0
+    du[tags.idx.a1t:tags.idx.y1t] .= 0
+
+
+	# Elongation factors 
+	du[tags.idx.EGT] =  k_EFG_GTP_Ass * EFG * GTP - k_EFGGTP_Diss * EGT		# Rate of EFG_GTP # 25
+	du[tags.idx.EGD] = -(k_EFGGDP_Diss * EGD - k_EFG_GDP_Ass * EFG * GDP)		# Rate of EFG_GDP # 26
+	du[tags.idx.EFT] = (k_EFTsf * Est) * (EFD * GTP - (GDP * EFT/Keq_EFTu))/ (KM_GTP * EFD + KM_EFTuGDP * GTP + (k_EFTsf * Est * KM_EFTuGTP * GDP)/(k_EFTsr * Est * Keq_EFTu) + (k_EFTsf * Est * KM_GDP * EFT)/(k_EFTsr * Est * Keq_EFTu)+
+			EFD * GTP + (k_EFTsf * Est * KM_EFTuGTP * EFD * GDP)/(k_EFTsr * Est * Keq_EFTu * Ki_EFTuGDP) + (k_EFTsf * Est * GDP * EFT) /(k_EFTsr * Est * Keq_EFTu) + 
+			(KM_EFTuGDP * GTP * EFT)/ Ki_EFTuGTP) -
+			+((k_T3j_f * EFT * tA1 - k_T3j_d * a1t),(k_T3j_f * EFT * tA2 - k_T3j_d * a2t),(k_T3j_f * EFT * tC1 - k_T3j_d * c1t),(k_T3j_f * EFT * tD1 - k_T3j_d * d1t),(k_T3j_f * EFT * tE2 - k_T3j_d * e2t),(k_T3j_f * EFT * tF1 - k_T3j_d * f1t),(k_T3j_f * EFT * tG2 - k_T3j_d * g2t),(k_T3j_f * EFT * tG3 - k_T3j_d * g3t),(k_T3j_f * EFT * tH1 - k_T3j_d * h1t),(k_T3j_f * EFT * tI1 - k_T3j_d * i1t),(k_T3j_f * EFT * tK1 - k_T3j_d * k1t),(k_T3j_f * EFT * tL1 - k_T3j_d * l1t),(k_T3j_f * EFT * tL2 - k_T3j_d * l2t),(k_T3j_f * EFT * tL3 - k_T3j_d * l3t),(k_T3j_f * EFT * tL4 - k_T3j_d * l4t),(k_T3j_f * EFT * tL5 - k_T3j_d * l5t),(k_T3j_f * EFT * tM1 - k_T3j_d * m1t),(k_T3j_f * EFT * tN1 - k_T3j_d * n1t),(k_T3j_f * EFT * tP1 - k_T3j_d * p1t),(k_T3j_f * EFT * tP2 - k_T3j_d * p2t),(k_T3j_f * EFT * tP3 - k_T3j_d * p3t),(k_T3j_f * EFT * tQ1 - k_T3j_d * q1t),(k_T3j_f * EFT * tQ2 - k_T3j_d * q2t),(k_T3j_f * EFT * tR2 - k_T3j_d * r2t),(k_T3j_f * EFT * tR3 - k_T3j_d * r3t),(k_T3j_f * EFT * tR4 - k_T3j_d * r4t),(k_T3j_f * EFT * tR5 - k_T3j_d * r5t),(k_T3j_f * EFT * tS1 - k_T3j_d * s1t),(k_T3j_f * EFT * tS2 - k_T3j_d * s2t),(k_T3j_f * EFT * tS3 - k_T3j_d * s3t),(k_T3j_f * EFT * tS5 - k_T3j_d * s5t),(k_T3j_f * EFT * tT1 - k_T3j_d * t1t),(k_T3j_f * EFT * tT2 - k_T3j_d * t2t),(k_T3j_f * EFT * tT4 - k_T3j_d * t4t),(k_T3j_f * EFT * tV1 - k_T3j_d * v1t),(k_T3j_f * EFT * tV2 - k_T3j_d * v2t),(k_T3j_f * EFT * tW1 - k_T3j_d * w1t),(k_T3j_f * EFT * tY1 - k_T3j_d * y1t)); # 27
+
+	# steady-state of elongation factors
+
+	T3  = zeros(Float64, tags.species_and_sequences.no_of_tRNAs);
+
+	T3[1:end] = u[tags.idx.a1t:tags.idx.y1t]
+
+	T3sum = sum(T3);
+
+	# DAE system
+	du[tags.idx.EFG] = EFG + EGT + EGD - c_EFG_t;   # EFG
+	du[tags.idx.EFD] = EFT + EFD - Eut + T3sum;     # EFTu_GDP
+	
+	nothing
+end
+
+
+
+
+
 # Start: 26.02.2025
 # By: Cedric Meyer 
 # Purpose: ODE function only for preintegration (excluding sequence module)
@@ -629,7 +802,7 @@ function ODE_preintegration(du, u, p, t)
 
     fill!(du, 0.0)  # Reset to zero, just like initializing with zeros
 
-    rhs_metabolites!(du, u, p)
+    rhs_metabolites_preintegration!(du, u, p)
    
     nothing 
 end 
@@ -645,14 +818,10 @@ simulates everything except tRNA related fun
 """
 
 
-function preintegration(tags, y0, M, scale)
+function preintegration(tags, y0, M)
 	## preintegration - Simulation until steady state before introduction of the disturbance of interest - the sequence
 
 	y_steady_state = copy(y0)
-
-	TC_scale_init = scale.V_TC_scale; # array [1,1]
-
-	scale.V_TC_scale = 0.0; # array [1,1]
 
 	# Preintegration
 
@@ -670,7 +839,6 @@ function preintegration(tags, y0, M, scale)
 
 	y_steady_state[1:end] = sol[end]
 
-	scale.V_TC_scale = TC_scale_init;
 
 	return y_steady_state
 
@@ -823,7 +991,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 	for (i, seq_name) in enumerate(seq_names)
 
 		
-		sequence 		= seqs[seq_name].Codon
+		sequence 		= String.(seqs[seq_name].Codon)
 
 		# Additional tags for model species 
 		species = ["RNA"* string(i),"S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
@@ -842,7 +1010,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		species_and_seqs	= txtl_types.species_and_sequences(tags.species_and_sequences.seq_names, tags.species_and_sequences.no_of_seqs, tags.species_and_sequences.µ, 
 		tags.species_and_sequences.avail_rib, tags.species_and_sequences.Tag, sequence, tags.species_and_sequences.Tagcell, tags.species_and_sequences.Name, tags.species_and_sequences.cod, 
 		tags.species_and_sequences.efac, tags.species_and_sequences.as, tags.species_and_sequences.tRNAs, tags.species_and_sequences.codAS, tags.species_and_sequences.t3tRNA, tags.species_and_sequences.AA, 
-		tags.species_and_sequences.Tag_constant_vars, tags.species_and_sequences.no_of_tRNAs, tags.species_and_sequences.no_of_variables)
+		tags.species_and_sequences.Tag_constant_vars, tags.species_and_sequences.no_of_tRNAs, tags.species_and_sequences.no_of_variables, tags.species_and_sequences.cod_idx)
 
 		idx_first_codon = length(Tags)+1
 		
