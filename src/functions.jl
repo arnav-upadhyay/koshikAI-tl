@@ -1278,3 +1278,59 @@ function ODE_parallel_distributed!(du, u, p, t)
 end
 
 # ---------------------------- figures -----------------------------------------
+
+"""
+	sequence_dataframes(sol, local_tags_list)
+
+Creates a dataframe with shared state variables and sequence specific ribosome concentrations. One dataframe per sequence. Gives back a list with a dataframe per sequence.
+"""
+
+function sequence_dataframes(sol, local_tags_list)
+    
+    df_list = []
+    seq_names = local_tags_list[1].seq_names
+    n_metab = length(local_tags_list[1].Tags)
+	idx = n_metab - 5
+    
+	for (seq_idx, seq_name) in enumerate(seq_names)
+        local_tags = local_tags_list[seq_idx]
+
+		# Prepare data frame 
+        df = DataFrame()
+        df.time = sol.t
+
+		# Metabolites
+        for i in 1:n_metab 
+            var_name = i <= length(local_tags.species_and_sequences.Tag) ? local_tags.species_and_sequences.Tag[i] : "State_$i"
+            df[!, var_name] = [u[i] for u in sol.u]
+        end
+
+		# Output variables 
+
+		out_start 	= n_metab - 4
+		out_end		= n_metab 
+
+		L = 0
+
+		for i in out_start:out_end
+			var_name = i <= length(local_tags.species_and_sequences.Tag) ? local_tags.species_and_sequences.Tag[i] : "State_$i"
+            df[!, var_name] = [u[i + L] for u in sol.u]
+		end
+
+		# Ribosome complexes
+        L = length(local_tags.species_and_sequences.Seq)-1
+        ribo_start = out_end + 1
+        ribo_end = out_end + L
+
+        for i in 1:L
+            df[!, "Ribosome_$(i)"] = [u[ribo_start-1+i] for u in sol.u]
+        end
+
+        push!(df_list, df)
+
+        idx += L + 5
+
+    end
+
+    return df_list
+end
