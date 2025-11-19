@@ -10,7 +10,7 @@ prepares matrices necessary for ODE
 eveything is stored in tags structure
 """
 
-function species_and_sequences(µ, sequence_file, hybrid_file, flags)
+function species_and_sequences(µ, sequence_file, hybrid_file, flags, seqs_to_use)
 
 	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
 	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
@@ -19,7 +19,7 @@ function species_and_sequences(µ, sequence_file, hybrid_file, flags)
 	hyb_file = hybrid_path * "\\" * hybrid_file
 
 	
-	seqs, seq_names = seqs_import_transcripts(seq_file) # Function that transforms DNA Sequence into mRNA, amino acids and codons
+	seqs, seq_names = seqs_import_transcripts(seq_file, seqs_to_use) # Function that transforms DNA Sequence into mRNA, amino acids and codons
 	hyb_file_dict = Dict{String, String}()
 	if flags.anti_shinedalgarno == true
 		hyb_files = [hyb_file]
@@ -90,45 +90,49 @@ end
 
 
 """
-    seqs_import_transcripts_parallel(filename::String)
+    seqs_import_transcripts(filename::String)
 
 Function to read in sequences from a fasta file. Throws error if the sequence is not divisible by three.
 """
 
 
-function seqs_import_transcripts(filename::String)
+function seqs_import_transcripts(filename::String, seqs_to_use)
     records = readfasta(filename)
     n = length(records)
-    Seqs = Vector{Pair{String, txtl_types.SequenceData}}(undef, n)
+	no_of_seqs = seqs_to_use[2] - seqs_to_use[1] + 1
+    Seqs = Vector{Pair{String, txtl_types.SequenceData}}(undef, no_of_seqs)
+
     
     # Track problematic sequences
     problematic_sequences = String[]
     
     for i in 1:n
-        try
-            record = records[i]
-            header  = String(record[1])
-            dna     = LongDNA{2}(String(record[2]))
-            
-            # Check if sequence length is divisible by 3
-            if length(dna) % 3 != 0
-                push!(problematic_sequences, header)
-                println("⚠️ Warning: Sequence '$header' has length $(length(dna)) (not divisible by 3)")
-                println("   Skipping this sequence...")
-                continue
-            end
-            
-            rna     = convert(LongRNA{2}, dna)
-            aa1     = BioSequences.translate(dna)
-            codons  = [LongSubSeq(rna, j:j+2) for j in 1:3:length(rna)-2]
-            Seqs[i] = header => txtl_types.SequenceData(dna, rna, aa1, codons)
-            
-        catch e
-            push!(problematic_sequences, String(records[i][1]))
-            println("❌ Error processing sequence '$i': $(e)")
-            println("   Skipping this sequence...")
-            continue
-        end
+		if i >= seqs_to_use[1] && i <= seqs_to_use[2]
+			try
+				record = records[i]
+				header  = String(record[1])
+				dna     = LongDNA{2}(String(record[2]))
+				
+				# Check if sequence length is divisible by 3
+				if length(dna) % 3 != 0
+					push!(problematic_sequences, header)
+					println("⚠️ Warning: Sequence '$header' has length $(length(dna)) (not divisible by 3)")
+					println("   Skipping this sequence...")
+					continue
+				end
+				
+				rna     = convert(LongRNA{2}, dna)
+				aa1     = BioSequences.translate(dna)
+				codons  = [LongSubSeq(rna, j:j+2) for j in 1:3:length(rna)-2]
+				Seqs[i] = header => txtl_types.SequenceData(dna, rna, aa1, codons)
+				
+			catch e
+				push!(problematic_sequences, String(records[i][1]))
+				println("❌ Error processing sequence '$i': $(e)")
+				println("   Skipping this sequence...")
+				continue
+			end
+		end
     end
     
     # Filter out any nil entries from problematic sequences
