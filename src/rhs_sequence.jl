@@ -36,8 +36,6 @@ function rhs_sequence!(du, u, p)
     rate_RIB        = zeros(Float64, len_sequence-1);
     @views c_RIB	= u[tags.idx_first_codon:end]
 
-    println(length(c_RIB))
-
     # Transcription -----------------
 
     # Free mRNA (RNA) levels are given by a starting value to implement mRNA concentrations from transcriptomics measurements
@@ -64,9 +62,9 @@ function rhs_sequence!(du, u, p)
     q_R_elo     = ones(len_sequence-1);
         
     @views for i in 2:(len_sequence - 13)
-        println(i)
+
         if total_RNA-sum(c_RIB[i:i+12]) == 0
-            println("here")
+
             q_R_elo[i] 	= 0;
         else
             q_R_elo[i] 	= 1 - c_RIB[i+12] / (total_RNA-sum(c_RIB[i:i+11]));
@@ -74,7 +72,7 @@ function rhs_sequence!(du, u, p)
         end
     end 
 
-    println(tags.sequence_name)
+
     @views for i in (len_sequence-13) : (len_sequence-1)
         if total_RNA - sum(c_RIB[i : end]) == 0
             q_R_elo[i] = 0
@@ -125,6 +123,7 @@ function rhs_sequence!(du, u, p)
     V_TL_EL_sum = sum(V_TL_EL);
 
     c_codon_seq = tags.matrix_N * c_Codon
+
     N = C_vect[1,:] * (1 ./c_codon_seq)'
 
     # Replace Inf values with 0

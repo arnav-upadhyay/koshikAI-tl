@@ -33,7 +33,7 @@ function init_scale()
 end
 
 
-mutable struct indices_dynamic_variables
+struct indices_dynamic_variables
 		S30::Int
 		S50::Int
 		IF1::Int
@@ -173,8 +173,6 @@ mutable struct indices_dynamic_variables
 		PRT::Int
 		PTC::Int
 	end
-
-indices = indices_dynamic_variables(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
 
 # ---------------------------species_and_sequences! ----------------------------------------------
 

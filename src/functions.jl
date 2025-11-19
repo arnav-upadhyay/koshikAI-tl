@@ -1001,8 +1001,8 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		Tags 	= [strip(s) for s in vcat(tags.species_and_sequences.Tag[1:end-5],species)] 
 		
 		# Arrays necessary for elongation
-		alpha_struc 	= alpha_struc_generation(tags)
-		matrix_N 		= N_generation(tags)
+		alpha_struc 	= alpha_struc_generation(tags, sequence)
+		matrix_N 		= N_generation(tags, sequence)
 		tRNA_charg 		= tRNAcharging(tags)
 		t3_Codon_struc 	= sum_of_t3complex(tags)
 		
@@ -1029,7 +1029,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 end
 
 
-function alpha_struc_generation(tags)
+function alpha_struc_generation(tags, sequence)
 
 	# generate matrix to calculate the consumption of aa-tRNA concentration (dependent on codon and c_aa-tRNA)
 
@@ -1055,7 +1055,7 @@ function alpha_struc_generation(tags)
 	# for codon j 
 
 	# Generate zero matrix with the tRNAs in the rows and the codons in the columns
-	alpha_struc = zeros(tags.species_and_sequences.no_of_tRNAs,length(tags.species_and_sequences.Seq)-1)
+	alpha_struc = zeros(tags.species_and_sequences.no_of_tRNAs,length(sequence)-1)
 
 	# For every tRNA get every cognate codon
 	str_cod = fill("", length(tags.species_and_sequences.codAS), 3)
@@ -1070,7 +1070,7 @@ function alpha_struc_generation(tags)
 	# if the codonsequence fits with the codon (that can be bound by a specific
 	# t3-complex) the codon gets the value one
 	# Array with codons of gene sequence 
-	strCodon = tags.species_and_sequences.Seq[1:end-1]
+	strCodon = sequence[1:end-1]
 	for t in 1:tags.species_and_sequences.no_of_tRNAs # tRNAas
 		for j = 1:size(strCodon, 1) # codons of the sequence 
 			for m = 1:size(str_cod,2) # cognate codons of tRNAs
@@ -1083,14 +1083,14 @@ function alpha_struc_generation(tags)
 
 	# Extension of alpha_struc with zeros to get the same dimension as N
 	# (N= matrix of loaded tRNA per Codon)
-	O = zeros(size((tags.species_and_sequences.Name),1)-tags.species_and_sequences.no_of_tRNAs, length(tags.species_and_sequences.Seq)-1)
+	O = zeros(size((tags.species_and_sequences.Name),1)-tags.species_and_sequences.no_of_tRNAs, length(sequence)-1)
 	alpha_struc = vcat(O, alpha_struc)
 
 	return alpha_struc
 
 end
 
-function N_generation(tags)
+function N_generation(tags, sequence)
 
 	# Function   : generation of N
 	# Written by : Maike Kuschel
@@ -1105,11 +1105,11 @@ function N_generation(tags)
 	# generates only entries in matrix_N, if the codons fit with the
 	# sequence)
 
-	matrix_N = zeros(length(tags.species_and_sequences.Seq)-1, size(tags.species_and_sequences.cod,1)-1)
+	matrix_N = zeros(length(sequence)-1, size(tags.species_and_sequences.cod,1)-1)
 
-	for i = 1:size(tags.species_and_sequences.Seq,1)-1
+	for i = 1:size(sequence,1)-1
 		for j = 1:size(tags.species_and_sequences.cod,1)-1
-			if String(tags.species_and_sequences.Seq[i]) == tags.species_and_sequences.cod[j]
+			if String(sequence[i]) == tags.species_and_sequences.cod[j]
 				matrix_N[i,j] = 1
 			end
 		end
@@ -1217,9 +1217,9 @@ function ODE_parallel_distributed!(du, u, p, t)
     @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
     idx = n_metab						# Index of last pool species
    
-    y_codons_lengths = Int[length(tags.species_and_sequences.Seq) + 4 for seq_name in tags.seq_names]	# List with sequence lengths - 1 stop codon + 5 observable variables
-
-    y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
+	y_codons_lengths = Int[length(local_tags_list[i].species_and_sequences.Seq) + 4 for i in eachindex(local_tags_list)]	# List with sequence lengths - 1 stop codon + 5 observable variables
+    
+	y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
     idx = n_metab
     @views for (i,L) in enumerate(y_codons_lengths)
         y_codons[i] = u[idx+1:idx+L]  # ✅ View statt Kopie
@@ -1235,7 +1235,6 @@ function ODE_parallel_distributed!(du, u, p, t)
     results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
         local_tags = local_tags_list[i]		# Extraction of local tags
         u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
-		println(length(u_seq))
         du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
         ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems
         return du_seq									# Rückgabe von du, abgespeichert in results
