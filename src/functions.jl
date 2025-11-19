@@ -10,7 +10,7 @@ prepares matrices necessary for ODE
 eveything is stored in tags structure
 """
 
-function species_and_sequences(µ, sequence_file, hybrid_file)
+function species_and_sequences(µ, sequence_file, hybrid_file, flags)
 
 	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
 	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
@@ -20,13 +20,16 @@ function species_and_sequences(µ, sequence_file, hybrid_file)
 
 	
 	seqs, seq_names = seqs_import_transcripts(seq_file) # Function that transforms DNA Sequence into mRNA, amino acids and codons
-
-	
-	hyb_files = [hyb_file]
 	hyb_file_dict = Dict{String, String}()
-	for (i, seq_name) in enumerate(seq_names)
-		hyb_file_dict[seq_name] = hyb_files[i]
+	if flags.anti_shinedalgarno == true
+		hyb_files = [hyb_file]
+		for (i, seq_name) in enumerate(seq_names)
+			hyb_file_dict[seq_name] = hyb_files[i]
+		end
+	else
+			hyb_file_dict["error"] = "No shine dalgarno sequence interaction"
 	end
+
 	seq_names = seq_names
 	no_of_seqs = length(seq_names)
 
@@ -1232,6 +1235,7 @@ function ODE_parallel_distributed!(du, u, p, t)
     results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
         local_tags = local_tags_list[i]		# Extraction of local tags
         u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
+		println(length(u_seq))
         du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
         ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems
         return du_seq									# Rückgabe von du, abgespeichert in results

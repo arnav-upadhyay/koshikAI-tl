@@ -185,7 +185,6 @@ struct species_and_sequences
 	avail_rib::Float64
 	Tag::Vector{SubString{String}}
 	Seq::Vector{String}
-	# Seq::Vector{LongSequence{RNAAlphabet{2}}}
 	Tagcell::Vector{String}
 	Name::Vector{String}
 	cod::Vector{String}	
