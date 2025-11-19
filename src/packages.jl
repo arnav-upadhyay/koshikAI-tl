@@ -19,8 +19,8 @@ using LinearAlgebra
 using Plots
 using LaTeXStrings  
 using Colors
-using JET
 using Dates
+using JLD2
 
 # Code optimization
 using JET
@@ -28,10 +28,8 @@ using BenchmarkTools
 
 # Files 
 include("datatypes.jl")
-include("efficiency_factors.jl")
 include("functions.jl")
 include("rhs_metabolites.jl")
 include("rhs_sequence.jl")
-include("ODE.jl")
 include("parameters.jl")
 

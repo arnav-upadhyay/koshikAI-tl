@@ -1210,6 +1210,18 @@ end
 
 # ------------------------------- Integration -----------------------------------------
 
+function ODE!(du, u, p, t)
+
+    fill!(du, 0.0)  # Reset to zero, just like initializing with zeros
+
+    rhs_metabolites!(du, u, p)
+    
+    rhs_sequence!(du, u, p)
+
+    nothing 
+end 
+
+
 # 3. Define the ODE function for solving (distributed, focused on derivatives)
 function ODE_parallel_distributed!(du, u, p, t)
 
@@ -1264,3 +1276,5 @@ function ODE_parallel_distributed!(du, u, p, t)
 
     return nothing
 end
+
+# ---------------------------- figures -----------------------------------------

@@ -452,4 +452,4 @@ struct data_struct_integration
 
 end
 
-end # module
+end # of module
