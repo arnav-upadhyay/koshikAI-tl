@@ -1,3 +1,4 @@
 {
-    "julia.executablePath": "C:\\Users\\ac142871\\.julia\\juliaup\\julia-1.11.7+0.x64.w64.mingw32\\bin\\julia.exe"
+    "julia.executablePath": "C:\\Users\\ac142871\\.julia\\juliaup\\julia-1.11.7+0.x64.w64.mingw32\\bin\\julia.exe",
+    "julia.NumThreads": 8
 }
