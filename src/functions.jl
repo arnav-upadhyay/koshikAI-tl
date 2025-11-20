@@ -1453,6 +1453,9 @@ function V_TL_EL_smooth(tags, V_TL_EL, c_RIB)
 end
 
 """
+	calculate_translation_rate(df)
+
+Calculates translation rate.
 """
 
 function calculate_translation_rate(df)
