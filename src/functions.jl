@@ -1334,3 +1334,135 @@ function sequence_dataframes(sol, local_tags_list)
 
     return df_list
 end
+
+"""
+	calculate_V_TL_EL(tags, y)
+
+Calculates V_TL_EL just like in rhs_sequence. Needed for plotting the translation elongation rate profile.
+"""
+
+
+function calculate_V_TL_EL(tags, y)
+
+    # Calculate q_R_elo 
+    # necessary parameters 
+    len_sequence = length((tags.species_and_sequences.Seq))
+    gene_sizes = length((tags.species_and_sequences.Seq))-1
+    num_species = length(tags.species_and_sequences.Name)
+
+    @unpack µ, k_proc, k_cat_Pol, C_RNP, V_TCmax, K_M_D, k_cat_E, C_RNE, V_degmax, K_M_deg, k_D, n_DNA_t, n_DNA_s = tags.p_seq.TX
+    @unpack k_TLEmaxj, KM_T3j, KM_EFGGTP = tags.p_seq.EL
+    @unpack k_TE, KM_RK, KM_GTP, KM_RF3GTP, k_RF3_diss_GDP, k_RF1_diss_GTP, k_GTP_hydr, k_RF1_ass = tags.p_seq.TER
+    @unpack k_RF3_GDP_ass, k_RF3_GTP_ass, k_RF3_GDP_diss, k_RF3_GTP_diss = tags.p_seq.RF3
+    @unpack A1, A2, A3, A4, A5, k_cat_K_M_G1, k_cat_K_M_G2, k_RRF, q_RRF, one_q_G2_k_split = tags.p_seq.PTC 
+
+    @unpack k_IN_70SIC, KM_mRNA, KM_50S, k_IN_IF2D, k_on_30S_IF3, k_off_30SIF3, k_on_30SIF3_IF1, k_off_30SIF3IF1, k_on_30SIF3_IF2, k_off_30SIF3IF2, k_on_30SIF3IF1_IF2, k_off_30SIF3IF1IF2, k_on_30SIF3IF2_IF1, k_off_30SIF3IF2IF1, k_on_30SIF123_fMet, k_off_30SIF123fMet = tags.p_met.IN
+    @unpack k_EFGGDP_Diss, k_EFG_GDP_Ass, k_EFG_GTP_Ass, k_EFGGTP_Diss, k_EFTsf, k_EFTsr, Keq_EFTu, KM_GTP, KM_GDP, KM_EFTuGDP, KM_EFTuGTP, Ki_EFTuGDP, Ki_EFTuGTP, c_EFG_t = tags.p_met.EF
+    @unpack k_cat, KM_ARS_tRNA, KM_ARS_aa, KM_ARS_ATP = tags.p_met.tRNA
+    @unpack k_T3j_f, k_T3j_d = tags.p_met.t3 
+    q_RBS = tags.p_met.q_RBS
+
+    # Unpack dynamic variables 
+    S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, 
+    tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, 
+    tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, 
+    r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC = y
+
+
+
+    # calculation of q_R_elo 
+    c_RIB = y[tags.idx_first_codon:end]
+    rna_free = y[tags.idx.RNA]
+    total_RNA = rna_free + sum(c_RIB[1:12])
+    s70_ini = y[tags.idx.S70]
+    PTC = y[tags.idx.PTC]
+
+    q_R_elo     = ones(gene_sizes);
+
+	q_R_elo[1] = 1 - (sum(c_RIB[1:12]) +s70_ini)/(rna_free+sum(c_RIB[1:12]))
+        
+    @views for i in 2:(len_sequence - 13)
+        q_R_elo[i] 	= 1 - c_RIB[i+12] / (total_RNA-sum(c_RIB[i:i+11]));
+    end 
+
+
+    @views for i in (len_sequence-13) : (len_sequence-1)
+            q_R_elo[i] = 1 - (c_RIB[end] + PTC) / (total_RNA - sum(c_RIB[i:end-1]))
+    end
+
+    # dynamic efficiency factor 
+    if tags.flags.dynamic_efficiency == true
+        efac = dynEffficiencyCalculation(tags, EGT, y);
+    end
+
+    # V_EL
+    C_vect = reshape(y[1:num_species], 1, num_species)  # Directly assign
+    c_Codon = tags.t3_Codon_struc * C_vect'
+
+    V_TL_EL	= zeros(len_sequence-1);
+
+    EGT_inv = inv(EGT)
+
+
+    for i in 1:len_sequence-2
+
+        cod_next = tags.species_and_sequences.Seq[i+1]
+        cod_curr = tags.species_and_sequences.Seq[i]
+
+        j = tags.species_and_sequences.cod_idx[cod_next]    # O(1) Lookup
+        k = tags.species_and_sequences.cod_idx[cod_curr]    # O(1) Lookup
+
+        cc = c_Codon[j]
+
+        eff = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i])
+        denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
+        V_TL_EL[i+1] = q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
+
+    end
+
+    return V_TL_EL
+
+end
+
+"""
+	V_TL_EL_smooth(tags, V_TL_EL, c_RIB)
+
+V_TL_EL divided by ribosome concentration and smoothed with sliding window. Minutes are transformed to seconds.
+"""
+
+
+function V_TL_EL_smooth(tags, V_TL_EL, c_RIB)
+	# parameters and arrays 
+	len_sequence 	= length(tags.species_and_sequences.Seq) # Codon length with stop codon
+	L 				= len_sequence - 2
+	V_ELO 			= zeros(L)
+	V_EL_smooth  	= zeros(L)
+	h1				= zeros(L)
+
+	# V_TL_EL per second
+	V_ELO = (V_TL_EL[2:end]./60)./(c_RIB[1:end-1]);
+	V_EL_smooth[1:3] 	= [mean(V_ELO[1:i+3])   for i in 1:3]
+	V_EL_smooth[4:L-3] 	= [mean(V_ELO[i-3:i+3]) for i in 4:L-3]
+	V_EL_smooth[L-2:L] 	= [mean(V_ELO[i-2:L])   for i in L-2:L];
+
+	# Plot
+	h1 .= mean(V_ELO)
+
+	return V_EL_smooth, h1
+
+end
+
+"""
+"""
+
+function calculate_translation_rate(df)
+    x1 = df.time[end]
+    x2 = df.time[end-1]
+    y1 = df.PRT[end]
+    y2 = df.PRT[end-1]
+
+    # Calculate increase 
+    m = (y2 - y1) / (x2 - x1)
+
+    return m 
+end

@@ -21,6 +21,7 @@ using LaTeXStrings
 using Colors
 using Dates
 using JLD2
+using Measures
 
 # Code optimization
 using JET
