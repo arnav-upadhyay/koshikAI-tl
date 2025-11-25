@@ -1220,8 +1220,6 @@ function ODE!(du, u, p, t)
 end 
 
 
-# 3. Define the ODE function for solving (distributed, focused on derivatives)
-function ODE_parallel_distributed!(du, u, p, t)
 # 3. Define the ODE function for solving (THREADED VERSION - only change: map -> Threads.@threads)
 
 function ODE_parallel_distributed!(du, u, p, t)
