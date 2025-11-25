@@ -77,6 +77,8 @@ prob 	= ODEProblem(f, y0_all, tspan, p_parallel); ## Create an ODE problem
 # --- Timing the integration step ---
 println("\n⏳ Integrating ODE system (threaded, $(length(seq_names)) sequences)...")
 
-@btime sol = solve(prob, FBDF(autodiff=false), reltol = 1e-10, abstol = 1e-6) ## Solve ODE system
+sol = solve(prob, FBDF(autodiff=false), reltol = 1e-10, abstol = 1e-6) ## Solve ODE system
 
+timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
+println(timestamp)
 println(" Integration completed!")
