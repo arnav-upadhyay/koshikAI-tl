@@ -1194,9 +1194,7 @@ end
 12.11.2025
 Function to build a state vector that includes metabolites, outputvariables for sequ. 1, codons sequ. 1, output 2, sequence 2 ...
 """
-
 function combined_states_vector(tags, y_steady_state, seqs, seq_names)
-
 	# 1. Build combined state vector for this set
 	y0_metab_output = y_steady_state[1:length(tags.species_and_sequences.Tag)]                                        # All species without the codons
 	y0_metab = y0_metab_output[1:end-5]                                                         # Species of the metabolite pool
@@ -1204,8 +1202,8 @@ function combined_states_vector(tags, y_steady_state, seqs, seq_names)
 	ribosome_positions = [zeros(length(seqs[seq_name].Codon) - 1) for seq_name in seq_names]    # All codons per sequence 
 	output_sequences = reduce(vcat, ([y0_output; ribosome_positions[i]...] for i in eachindex(ribosome_positions))) # One set of output variables per sequence 
 	y0_all = vcat(y0_metab, output_sequences);                                                   # concatenate everything: metabolites pool, output 1, sequence 1, output 2, sequence 2, output 3, sequence 3 ...
-
 	return y0_all
+
 end
 
 # ------------------------------- Integration -----------------------------------------
@@ -1224,17 +1222,19 @@ end
 
 # 3. Define the ODE function for solving (distributed, focused on derivatives)
 function ODE_parallel_distributed!(du, u, p, t)
+# 3. Define the ODE function for solving (THREADED VERSION - only change: map -> Threads.@threads)
 
+function ODE_parallel_distributed!(du, u, p, t)
     local_tags_list = p				# Extraction of local_tags_list from p
     tags            = local_tags_list[1]
-
     n_metab = length(tags.species_and_sequences.Tag) -5 		# number of metabolites in the shared pool that is used by all sequences 
-
     @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
     idx = n_metab						# Index of last pool species
-   
+
+
 	y_codons_lengths = Int[length(local_tags_list[i].species_and_sequences.Seq) + 4 for i in eachindex(local_tags_list)]	# List with sequence lengths - 1 stop codon + 5 observable variables
-    
+
+
 	y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
     idx = n_metab
     @views for (i,L) in enumerate(y_codons_lengths)
@@ -1247,26 +1247,30 @@ function ODE_parallel_distributed!(du, u, p, t)
     du_metab_all = [zeros(n_metab) for _ in 1:n_seq]	# List to store a du vector for the metabolite pool for every sequence 
     du_codons = Vector{Vector{Float64}}(undef, n_seq)	# List to store a du vector for the codons for every sequence 
 
-    # Distributed parallelization of per-sequence rate calculations
-    results = map(1:n_seq) do i						    # Mapping der Schleife auf die worker
+    # THREADED parallelization of per-sequence rate calculations
+    # ONLY CHANGE: map -> Threads.@threads for
+    results = Vector{Vector{Float64}}(undef, n_seq)  # Pre-allocate results array
+    Threads.@threads for i in 1:n_seq						    # Threading instead of map
         local_tags = local_tags_list[i]		# Extraction of local tags
         u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
         du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
         ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems
-        return du_seq									# Rückgabe von du, abgespeichert in results
+        results[i] = du_seq								# Store result directly (thread-safe)
     end
-
+    
     @views for i in 1:n_seq								# Loop over number of sequences
         du_metab_all[i] .= results[i][1:n_metab]	    # Abspeichern aller rates der Metabolite 
         du_codons[i] = results[i][n_metab+1:end]		# Abspeichern aller rates für die Ribosomen
     end
 
     du_metab = zeros(n_metab)						    # Summation der n_metab du
+
     for i in 1:n_seq
         du_metab .+= du_metab_all[i]
     end
 
     @views du[1:n_metab] .= du_metab                    # Zusammensetzung des gesamten rates vectors
+
     idx = n_metab
     for i in 1:n_seq
         len = length(du_codons[i])
@@ -1468,4 +1472,5 @@ function calculate_translation_rate(df)
     m = (y2 - y1) / (x2 - x1)
 
     return m 
+
 end
