@@ -24,6 +24,7 @@ optimization_workflow.ipynb
 *.csv
 *.tsv
 *.xlsx
+*.jld2
 
 # Keep this excel file:
 !docs/01_Test_data_for_model_implementation.xlsx

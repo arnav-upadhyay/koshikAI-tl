@@ -26,6 +26,8 @@ using Measures
 # Code optimization
 using JET
 using BenchmarkTools
+using Base.Threads
+println("🔧 Julia started with $(Threads.nthreads()) threads")
 
 # Files 
 include("datatypes.jl")

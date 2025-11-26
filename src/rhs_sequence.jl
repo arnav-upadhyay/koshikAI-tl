@@ -25,7 +25,9 @@ function rhs_sequence!(du, u, p)
     S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, 
     tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, 
     tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, 
-    r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC = u 
+    r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, S70, rna, PRT, PTC = u 
+
+    RNA = tags.RNA
 
     # Containers 
     num_species = length(tags.species_and_sequences.Name)
@@ -40,14 +42,15 @@ function rhs_sequence!(du, u, p)
 
     # Free mRNA (RNA) levels are given by a starting value to implement mRNA concentrations from transcriptomics measurements
 
+    # No transcription modeling, if mRNA is given for whole cell transcriptome
 
     # # # tQSSR model used in Spindler
 
-    V_TCmax 	= k_cat_Pol * C_RNP
-    V_degmax    = k_cat_E * C_RNE
+    # V_TCmax 	= k_cat_Pol * C_RNP
+    # V_degmax    = k_cat_E * C_RNE
 
-    du[tags.idx.RNA] += (V_TCmax/(len_sequence*3) * C_D * tags.scale.V_TC_scale / ( K_M_D * (1 + (n_DNA_t-n_DNA_s)* 0.001/K_M_D)+ C_RNP + C_D * tags.scale.V_TC_scale )) - 
-    (V_degmax * RNA / (K_M_deg  + C_RNE + RNA ))	# 170
+    # du[tags.idx.RNA] += (V_TCmax/(len_sequence*3) * C_D * tags.scale.V_TC_scale / ( K_M_D * (1 + (n_DNA_t-n_DNA_s)* 0.001/K_M_D)+ C_RNP + C_D * tags.scale.V_TC_scale )) - 
+    # (V_degmax * RNA / (K_M_deg  + C_RNE + RNA ))	# 170
 
     ## translation elongation ----------------------------------------
 
@@ -274,7 +277,7 @@ function rhs_sequence!(du, u, p)
         du[1: num_species] .+= - K_T3;
         du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
         du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
-        du[tags.idx.RNA] += + V_TL_EL[12];
+        # du[tags.idx.RNA] += + V_TL_EL[12];
         du[tags.idx.rna] += - V_TL_EL[12];
 
     end

@@ -167,7 +167,7 @@ struct indices_dynamic_variables
 		v2t::Int
 		w1t::Int
 		y1t::Int
-		RNA::Int
+		# RNA::Int 
 		S70::Int
 		rna::Int
 		PRT::Int
@@ -425,6 +425,7 @@ struct data_struct_preintegration
     p_met::parameters_metabolites
     p_seq::parameters_sequence
 	p_dyn::parameters_dynamic_efficiency
+	RNA::Float64
 end
 
 # ----------------------------- Integration ---------------------------------------
@@ -449,7 +450,7 @@ struct data_struct_integration
 	efac_int_sd::Vector{Float64}
 	seq_names::Vector{String}
 	idx_first_codon::Int32
-
+	RNA::Float64
 end
 
 end # of module

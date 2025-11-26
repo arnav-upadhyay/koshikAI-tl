@@ -10,7 +10,7 @@ prepares matrices necessary for ODE
 eveything is stored in tags structure
 """
 
-function species_and_sequences(µ, sequence_file, hybrid_file, flags, seqs_to_use)
+function species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use)
 
 	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
 	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
@@ -19,18 +19,24 @@ function species_and_sequences(µ, sequence_file, hybrid_file, flags, seqs_to_us
 	hyb_file = hybrid_path * "\\" * hybrid_file
 
 	
-	seqs, seq_names = seqs_import_transcripts(seq_file, seqs_to_use) # Function that transforms DNA Sequence into mRNA, amino acids and codons
-	hyb_file_dict = Dict{String, String}()
-	if flags.anti_shinedalgarno == true
-		hyb_files = [hyb_file]
-		for (i, seq_name) in enumerate(seq_names)
-			hyb_file_dict[seq_name] = hyb_files[i]
-		end
-	else
-			hyb_file_dict["error"] = "No shine dalgarno sequence interaction"
-	end
+	seqs_all, seq_names_all = seqs_import_transcripts(seq_file, seqs_to_use) # Function that transforms DNA Sequence into mRNA, amino acids and codons
 
-	seq_names = seq_names
+
+	# !!!!!! Shine dalgarno needs to be adapted to competition mode !!!!!!!!!!!!!!!!
+	hyb_file_dict = Dict{String, String}()
+	# if flags.anti_shinedalgarno == true
+	# 	hyb_files = [hyb_file]
+	# 	for (i, seq_name) in enumerate(seq_names)
+	# 		hyb_file_dict[seq_name] = hyb_files[i]
+	# 	end
+	# else
+	# 		hyb_file_dict["error"] = "No shine dalgarno sequence interaction"
+	# end
+
+	# ------------ for competition mode
+	seq_names = genes		
+	# filter seqs_all
+	seqs = Dict(k => seqs_all[k] for k in seq_names if haskey(seqs_all, k));
 	no_of_seqs = length(seq_names)
 
 	if µ < 0.56
@@ -53,7 +59,7 @@ function species_and_sequences(µ, sequence_file, hybrid_file, flags, seqs_to_us
 	# Tag structure
 
 	# Additional tags for model species 
-	species 		= ["RNA","S70","rna","PRT","PTC"]
+	species 		= ["S70","rna","PRT","PTC"]
 	Tag = [strip(String(s)) for s in vcat(metab.Tag, species)]
 	
 	Seq 		= String.(seqs[seq_names[1]].Codon)
@@ -706,29 +712,7 @@ function rhs_metabolites_preintegration!(du, u, p)
 	# Unpack dynamic variables 
 	S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC, RIB1 = u 
 
-	# Precompute inverse values (division is slow)
-	inv_ATP = 1/ATP
-
-	inv_Ala = 1/Ala 
-	inv_Cys = 1/Cys
-	inv_Asp = 1/Asp
-	inv_Glu = 1/Glu
-	inv_Phe = 1/Phe
-	inv_Gly = 1/Gly
-	inv_His = 1/His
-	inv_Ile = 1/Ile
-	inv_Lys = 1/Lys
-	inv_Leu = 1/Leu
-	inv_Met = 1/Met
-	inv_Asn = 1/Asn
-	inv_Pro = 1/Pro
-	inv_Gln = 1/Gln
-	inv_Arg = 1/Arg
-	inv_Ser = 1/Ser
-	inv_Thr = 1/Thr
-	inv_Val = 1/val
-	inv_Trp = 1/Trp
-	inv_Tyr = 1/Tyr
+	RNA = tags.RNA 
 
 	# Define RIB1
 	idx_first_codon = length(tags.species_and_sequences.Tag)+1
@@ -763,7 +747,7 @@ function rhs_metabolites_preintegration!(du, u, p)
 	du[tags.idx.SC4] = + k_off_30SIF123fMet*PIC       - k_on_30SIF123_fMet*SC4*b1t + k_on_30SIF3IF1_IF2*SC2*IF2 - k_off_30SIF3IF1IF2*SC4 + k_on_30SIF3IF2_IF1*SC3*IF1 - k_off_30SIF3IF2IF1*SC4 # 21
 	du[tags.idx.PIC] =  + k_on_30SIF123_fMet*SC4*b1t - k_off_30SIF123fMet*PIC - (((k_IN_70SIC * PIC)/ ( 1+(KM_mRNA/RNA+(KM_50S/S50)) )) .* q_RBS) # 22 30S PIC
 	du[tags.idx.b1t] = + k_off_30SIF123fMet*PIC - k_on_30SIF123_fMet*SC4*b1t + V_IN_IF2D # 35, db1t
-	du[tags.idx.RNA] = - V_IN_70SIC # 170, dRNA
+	# du[tags.idx.RNA] = - V_IN_70SIC # 170, dRNA
 	du[tags.idx.S70] = V_IN_70SIC - V_IN_IF2D # 171, dS70
 	du[tags.idx.rna] = V_IN_70SIC # 172, drna
 
@@ -991,7 +975,7 @@ end
 
 02.09.2025, Cedric Meyer, Generates local tags list needed for parallel computing in Arnavs pipeline
 """
-function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict)
+function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict, mRNA)
 
 	local_tags_list = Vector{txtl_types.data_struct_integration}()
 
@@ -1001,8 +985,8 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		sequence 		= String.(seqs[seq_name].Codon)
 
 		# Additional tags for model species 
-		species = ["RNA"* string(i),"S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
-		Tags 	= [strip(s) for s in vcat(tags.species_and_sequences.Tag[1:end-5],species)] 
+		species = ["S70"* string(i),"rna"* string(i),"PRT"* string(i),"PTC"* string(i)]
+		Tags 	= [strip(s) for s in vcat(tags.species_and_sequences.Tag[1:end-4],species)] 
 		
 		# Arrays necessary for elongation
 		alpha_struc 	= alpha_struc_generation(tags, sequence)
@@ -1020,10 +1004,13 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		tags.species_and_sequences.Tag_constant_vars, tags.species_and_sequences.no_of_tRNAs, tags.species_and_sequences.no_of_variables, tags.species_and_sequences.cod_idx)
 
 		idx_first_codon = length(Tags)+1
+
+		mRNA_concentration = filter(row -> row.gene == seq_name, mRNA).mRNA[]
+
 		
 		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff, 
 																tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name, Tags, alpha_struc, 
-																matrix_N, tRNA_charg, t3_Codon_struc, efac_pos_aa, efac_int_sd, seq_names, idx_first_codon)
+																matrix_N, tRNA_charg, t3_Codon_struc, efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration)
 
 		push!(local_tags_list, local_tags)
 	end
@@ -1196,14 +1183,34 @@ Function to build a state vector that includes metabolites, outputvariables for 
 """
 function combined_states_vector(tags, y_steady_state, seqs, seq_names)
 	# 1. Build combined state vector for this set
-	y0_metab_output = y_steady_state[1:length(tags.species_and_sequences.Tag)]                                        # All species without the codons
-	y0_metab = y0_metab_output[1:end-5]                                                         # Species of the metabolite pool
-	y0_output = y0_metab_output[end - 4: end]                                                   # Output species  "RNA" "S70"  "rna"  "PRT"  "PTC"
+	y0_metab_output = y_steady_state[1:length(tags.species_and_sequences.Tag)]                  # All species without the codons
+	y0_metab = y0_metab_output[1:end-4]                                                         # Species of the metabolite pool
+	y0_output = y0_metab_output[end - 3: end]                                                   # Output species  "RNA" "S70"  "rna"  "PRT"  "PTC"
 	ribosome_positions = [zeros(length(seqs[seq_name].Codon) - 1) for seq_name in seq_names]    # All codons per sequence 
 	output_sequences = reduce(vcat, ([y0_output; ribosome_positions[i]...] for i in eachindex(ribosome_positions))) # One set of output variables per sequence 
 	y0_all = vcat(y0_metab, output_sequences);                                                   # concatenate everything: metabolites pool, output 1, sequence 1, output 2, sequence 2, output 3, sequence 3 ...
+	
 	return y0_all
+end
 
+"""
+	include_mRNA_concentrations!(y0_all, tags_pre, seq_names, seqs, mRNA)
+
+26.11.2025
+Puts mRNA concentrations (From Lu, Vogel et al. 2007) into states vector.
+"""
+
+function include_mRNA_concentrations!(y0_all, tags_pre, seq_names, seqs, mRNA)
+    # Fill y0_all with mRNA concentrations
+
+    RNA_positions = calculate_RNA_position(tags_pre, seq_names, seqs)
+
+    for (i, seq_name) in enumerate(seq_names) 
+        mRNA_concentration = subset(mRNA, :gene => ByRow(==(seq_name)))
+        y0_all[RNA_positions[i]] = mRNA_concentration.mRNA[1]
+    end
+
+    return nothing
 end
 
 # ------------------------------- Integration -----------------------------------------
@@ -1225,12 +1232,12 @@ end
 function ODE_parallel_distributed!(du, u, p, t)
     local_tags_list = p				# Extraction of local_tags_list from p
     tags            = local_tags_list[1]
-    n_metab = length(tags.species_and_sequences.Tag) -5 		# number of metabolites in the shared pool that is used by all sequences 
+    n_metab = length(tags.species_and_sequences.Tag) -4 		# number of metabolites in the shared pool that is used by all sequences 
     @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
     idx = n_metab						# Index of last pool species
 
 
-	y_codons_lengths = Int[length(local_tags_list[i].species_and_sequences.Seq) + 4 for i in eachindex(local_tags_list)]	# List with sequence lengths - 1 stop codon + 5 observable variables
+	y_codons_lengths = Int[length(local_tags_list[i].species_and_sequences.Seq) + 3 for i in eachindex(local_tags_list)]	# List with sequence lengths - 1 stop codon + 5 observable variables
 
 
 	y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
@@ -1374,7 +1381,8 @@ function calculate_V_TL_EL(tags, y)
 
     # calculation of q_R_elo 
     c_RIB = y[tags.idx_first_codon:end]
-    rna_free = y[tags.idx.RNA]
+    # rna_free = y[tags.idx.RNA]
+    rna_free = tags.RNA
     total_RNA = rna_free + sum(c_RIB[1:12])
     s70_ini = y[tags.idx.S70]
     PTC = y[tags.idx.PTC]
@@ -1471,4 +1479,66 @@ function calculate_translation_rate(df)
 
     return m 
 
+end
+
+function save_results(sol, local_tags_list, save_data)
+	
+	if save_data == true
+		# Save results 
+		timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
+		filename = "output/sol_" * timestamp * ".jld2"
+
+		@save filename sol local_tags_list
+
+		println("Solution saved at $filename.")
+	end
+end
+
+# --------------------------- mRNA competition -----------------------------------------
+
+"""
+	calculate_RNA_position(tags, seq_names, seqs)
+	
+04.09.2025. Cedric Meyer. Calculates the position of RNA in y0_all states vector. Needed to set mRNA concentrations from file.
+"""
+
+function calculate_RNA_position(tags, seq_names, seqs)
+
+	n_metab 	= tags.idx.PTC
+	n_ribo 		= Vector{Int}()
+
+	for seq_name in seq_names
+		push!(n_ribo, length(seqs[seq_name].Codon)-1)
+	end
+
+	n_RNA 	= Vector{Int}()
+	idx 	= n_metab -4
+
+	for sequence_length in n_ribo 
+		idx += 1
+		push!(n_RNA, idx)
+		idx += 4
+		idx += sequence_length
+	end
+
+	return n_RNA
+end
+
+"""
+	function to_DataFrame(mat)
+
+11/07/2025 Cedric Meyer 
+Conversion of a matrix to a DataFrame with header
+"""
+
+function to_DataFrame(mat)
+	# Erste Zeile als Spaltennamen extrahieren
+	header = Symbol.(mat[1, :])  # in Symbole umwandeln (empfohlen für DataFrame)
+
+	# Restliche Zeilen sind die Daten
+	data = mat[2:end, :]
+
+	# DataFrame erzeugen
+	df = DataFrame( data , header)
+	return df 
 end
