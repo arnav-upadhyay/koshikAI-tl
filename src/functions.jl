@@ -12,14 +12,12 @@ eveything is stored in tags structure
 
 function species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use)
 
-	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
+	
 	hybrid_path = joinpath(@__DIR__, "..", "data", "sequences","hybridization_files")
-
-	seq_file = sequence_path * "\\" * sequence_file
 	hyb_file = hybrid_path * "\\" * hybrid_file
 
 	
-	seqs_all, seq_names_all = seqs_import_transcripts(seq_file, seqs_to_use) # Function that transforms DNA Sequence into mRNA, amino acids and codons
+	seqs_all, seq_names_all = seqs_import_transcripts(sequence_file, seqs_to_use) # Function that transforms DNA Sequence into mRNA, amino acids and codons
 
 
 	# !!!!!! Shine dalgarno needs to be adapted to competition mode !!!!!!!!!!!!!!!!
@@ -102,7 +100,11 @@ Function to read in sequences from a fasta file. Throws error if the sequence is
 """
 
 
-function seqs_import_transcripts(filename::String, seqs_to_use)
+function seqs_import_transcripts(sequence_file::String, seqs_to_use)
+	
+	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
+	filename = sequence_path * "\\" * sequence_file
+
     records = readfasta(filename)
     n = length(records)
 	no_of_seqs = seqs_to_use[2] - seqs_to_use[1] + 1
@@ -159,7 +161,7 @@ function seqs_import_transcripts(filename::String, seqs_to_use)
     SeqsDict = Dict(valid_seqs)
     sequence_names = collect(keys(SeqsDict))
     
-    println("✅ Successfully loaded $(length(sequence_names)) sequences")
+    # println("✅ Successfully loaded $(length(sequence_names)) sequences")
     return SeqsDict, sequence_names
 end
 
@@ -599,7 +601,7 @@ function calculation_of_initial_concentration(species_and_seqs, seqs, seq_names,
 	# Plasmid 
 	C_D			= 0.001;				 # nM --> 4.246e-3 µM/0.004246  /2.5e-3/one Gene --> 0.0010 µM
 	constant_vars[37] = C_D
-
+<
 
 	## read out total concentrations for mass balances
 	c_tot_EFG = y0[idx.EFG]
@@ -702,9 +704,9 @@ function rhs_metabolites_preintegration!(du, u, p)
 
 	@unpack k_IN_70SIC, KM_mRNA, KM_50S, k_IN_IF2D, k_on_30S_IF3, k_off_30SIF3, k_on_30SIF3_IF1, k_off_30SIF3IF1, k_on_30SIF3_IF2, k_off_30SIF3IF2, k_on_30SIF3IF1_IF2, k_off_30SIF3IF1IF2, k_on_30SIF3IF2_IF1, k_off_30SIF3IF2IF1, k_on_30SIF123_fMet, k_off_30SIF123fMet = tags.p_met.IN
 	@unpack k_EFGGDP_Diss, k_EFG_GDP_Ass, k_EFG_GTP_Ass, k_EFGGTP_Diss, k_EFTsf, k_EFTsr, Keq_EFTu, KM_GTP, KM_GDP, KM_EFTuGDP, KM_EFTuGTP, Ki_EFTuGDP, Ki_EFTuGTP, c_EFG_t = tags.p_met.EF
-	@unpack k_cat, KM_ARS_tRNA, KM_ARS_aa, KM_ARS_ATP = tags_pre.p_met.tRNA
-	@unpack k_T3j_f, k_T3j_d = tags_pre.p_met.t3 
-	q_RBS = tags_pre.p_met.q_RBS
+	@unpack k_cat, KM_ARS_tRNA, KM_ARS_aa, KM_ARS_ATP = tags.p_met.tRNA
+	@unpack k_T3j_f, k_T3j_d = tags.p_met.t3 
+	q_RBS = tags.p_met.q_RBS
 
 	# Unpack constant variables 
 	ATP, GTP, UTP, CTP, ADP, GDP, UDP, CDP, AMP, GMP, UMP, CMP, Eut, Est, RFt, RRF, Ala, Cys, Asp, Glu, Phe, Gly, His, Ile, Lys, Leu, Met, Asn, Pro, Gln, Arg, Ser, Thr, val, Trp, Tyr, C_D = tags.init_c.constant_vars
@@ -1541,4 +1543,115 @@ function to_DataFrame(mat)
 	# DataFrame erzeugen
 	df = DataFrame( data , header)
 	return df 
+end
+
+# ---------------------- Model validation ----------------------------------
+
+"""
+	competition_model()
+
+01.12.2025; Model wrapped in a function to call it with one line.
+"""
+
+function competition_model(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use, mRNA)
+	## Import information about model sp ecies and sequences 
+	seqs, seq_names, hyb_file_dict, species_and_seqs, idx = species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use)
+	# Are mRNA gene names in E_coli gene 
+
+	## Calculate efficiency factors 
+	efac_pos_aa_dict, efac_int_sd_dict, dynamic_efficiencies = efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs)
+
+	## calculation of initial concentrations
+	y0, initial_concentrations = calculation_of_initial_concentration(species_and_seqs, seqs, seq_names, scale, idx);
+
+	## calculate and load kinetic parameters
+	p_met, p_seq, p_dyn = parameters(initial_concentrations, species_and_seqs);
+
+	## Release factor balance
+	RF_balance!(y0, initial_concentrations)
+
+	# Preintegration
+	## Definition of mass matrix
+	conserved = [idx.EFG, idx.EFD] # EFG, EFTu_GDP - Conserved species, Algebraic equations are given by mass balances
+
+	M = Matrix{Float64}(I, length(y0), length(y0)) # Creates unity matrix in the size of y0
+
+	M[conserved, :] .= 0; # setting mass matrix to zero to  remove time derivatives from those variables. This converts these differential equations into algebraic constraints
+
+
+	tags_pre = txtl_types.data_struct_preintegration(scale, idx, species_and_seqs, flags, dynamic_efficiencies, initial_concentrations, p_met, p_seq, p_dyn, mRNA.mRNA[1])
+
+	## Integration of the DAE system without DNA in the system 
+	y_steady_state = preintegration(tags_pre, y0, M);
+
+
+	# Elongation factor balance 
+	EF_balance!(tags_pre, y0, y_steady_state)
+
+
+	# Build states vector for multiple sequences 
+	y0_all = combined_states_vector(tags_pre, y_steady_state, seqs, seq_names)
+
+	# include_mRNA_concentrations!(y0_all, tags_pre, seq_names, seqs, mRNA)
+
+	# Prepare per-sequence tags (for use in ODE)
+	local_tags_list = generate_local_tags(seqs, seq_names, tags_pre, efac_pos_aa_dict, efac_int_sd_dict, mRNA);
+
+	# Integration
+	M = Matrix{Float64}(I, length(y0_all), length(y0_all))
+
+	M[conserved, :] .= 0
+
+	tspan 	= (0.0, 100.0) ## Define time span for the simulation
+
+	p_parallel = local_tags_list
+
+	f 		= ODEFunction(ODE_parallel_distributed!, mass_matrix = M) ## Define ODEFunction to make use of mass matrix
+
+	prob 	= ODEProblem(f, y0_all, tspan, p_parallel); ## Create an ODE problem
+
+
+
+	# --- Timing the integration step ---
+	println("\n⏳ Integrating ODE system (threaded, $(length(seq_names)) sequences)...")
+
+	sol = solve(prob, FBDF(autodiff=false), reltol = 1e-8, abstol = 1e-6) ## Solve ODE system
+
+	println("Integration completed!")
+
+	return sol, p_parallel
+end
+
+
+
+"""
+	calculate_absolute_protein_µgmL(c_x0, µ, t_process, weight_cell, volume_cell, translation_rate, mass_protein)
+
+30.10.2025, Function calculates the protein concentration at the end of the cultivation. Given translation rates and all other parameters specified in function.
+"""
+function calculate_absolute_protein_µgmL(c_x0, µ, t_process, weight_cell, volume_cell, translation_rate, mass_protein) # give mass_protein in Dalton, t in hours, everything else in SI units 
+	
+	qp 				= calculate_qp(translation_rate, weight_cell, volume_cell) 	# µmol/gDW/h
+	c_p 			= qp *c_x0 / µ *(exp(µ*t_process) -1) 						# µM
+	mass_protein 	= mass_protein/1000 										# g/µmol
+	c_gL 			= c_p * mass_protein										# g/L -> mg/mL
+	c_µgmL			= c_gL * 1000												# µg/mL
+	
+	return c_µgmL
+end
+
+
+"""
+	calculate_qp(translation_rate)
+
+Cedric Meyer, 01/08/2025
+Transforms the translation rate that is calculated in the model into biomass specific production rate qp
+"""
+
+function calculate_qp(translation_rate, weight_cell, volume_cell)
+	cells_per_gram 		= 1/weight_cell						# 1/g
+	volume_per_gram		= cells_per_gram*volume_cell		# L_cell/gDW 
+	v_t 				= translation_rate*60				# µmol/L_cell/h
+	qp  				= v_t * volume_per_gram				# µmol/gDW/h
+	return qp 
 end
