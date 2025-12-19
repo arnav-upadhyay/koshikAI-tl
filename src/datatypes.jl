@@ -430,6 +430,19 @@ end
 
 # ----------------------------- Integration ---------------------------------------
 
+struct vectors
+    y_codons_lengths::Vector{Int}
+	offsets::Vector{Int}
+    n_metab::Int64 
+    n_seq::Int64 
+    du_metab_all::Vector{Vector{Float64}}
+    du_codons::Vector{Vector{Float64}}
+    y_codons::Vector{Vector{Float64}}
+    results::Vector{Vector{Float64}}
+	du_seq::Vector{Vector{Float64}}
+	du_metab::Vector{Float64}
+end
+
 struct data_struct_integration 
 	scale::scale
     idx::indices_dynamic_variables
@@ -451,6 +464,11 @@ struct data_struct_integration
 	seq_names::Vector{String}
 	idx_first_codon::Int32
 	RNA::Float64
+end
+
+struct parameters 
+	local_tags_list::Vector{data_struct_integration}
+	vectors::vectors
 end
 
 end # of module
