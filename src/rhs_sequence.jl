@@ -107,9 +107,8 @@ function rhs_sequence!(du, u, p)
     N= C_vect' * (1 ./c_codon_seq)'
 
     M = zeros(size(N))
-
-    for i in 1:size(N,1)
-        for k in 1:size(N,2)
+    for k in 1:size(N,2)
+        for i in 1:size(N,1)
             M[i,k] = tags.alpha_struc[i,k] * N[i,k]
         end
     end
@@ -183,30 +182,28 @@ function rhs_sequence!(du, u, p)
 
     # translation elongation - calculation of du 
 
-    if RNA == 0 # concentration of free mRNA
-        du = du
-    else
 
-        # concentration of the ribosome at the specific codon
-        rate_RIB[1] = - V_TL_EL[2];  
 
-        for i in 2: len_sequence-2
-            rate_RIB[i] = V_TL_EL[i] - V_TL_EL[i+1];	
-        end
+    # concentration of the ribosome at the specific codon
+    rate_RIB[1] = - V_TL_EL[2];  
 
-        rate_RIB[len_sequence-1] = rate_RIB[len_sequence-1] + V_TL_EL[end];
-
-        # concentration of the unloaded tRNA
-        du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
-
-        # concentration of the ternary-complex
-        du[1: num_species] .+= - K_T3;
-        du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
-        du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
-        # du[tags.idx.RNA] += + V_TL_EL[12];
-        du[tags.idx.rna] += - V_TL_EL[12];
-
+    for i in 2: len_sequence-2
+        rate_RIB[i] = V_TL_EL[i] - V_TL_EL[i+1];	
     end
+
+    rate_RIB[len_sequence-1] = rate_RIB[len_sequence-1] + V_TL_EL[end];
+
+    # concentration of the unloaded tRNA
+    du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
+
+    # concentration of the ternary-complex
+    du[1: num_species] .+= - K_T3;
+    du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
+    du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
+    # du[tags.idx.RNA] += + V_TL_EL[12];
+    du[tags.idx.rna] += - V_TL_EL[12];
+
+
 
     # save RIB in du
     du[tags.idx_first_codon:end] .+= rate_RIB;
