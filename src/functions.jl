@@ -1047,10 +1047,21 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 
 		mRNA_concentration = filter(row -> row.gene == seq_name, mRNA).mRNA[]
 
+		# numbers and arrays for rhs_sequence
+		num_species 	= length(tags.species_and_sequences.Name)
+		len_sequence 	= length(tags.species_and_sequences.Seq) # Codon length with stop codon 
+		rate_RIB        = zeros(Float64, len_sequence-1)
+		q_R_elo     	= ones(len_sequence-1)
+		M 				= zeros(num_species, len_sequence-1)
+		mtRNA 			= zeros(size(M,1),2);
 		
-		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff, 
-																tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name, Tags, alpha_struc, 
-																matrix_N, tRNA_charg, t3_Codon_struc, efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration)
+		local_tags 		= txtl_types.data_struct_integration(
+			tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff,
+			tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name,
+			Tags, alpha_struc, matrix_N, tRNA_charg, t3_Codon_struc, 
+			efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration,
+			num_species, len_sequence, rate_RIB, q_R_elo, M, 
+			mtRNA)
 
 		push!(local_tags_list, local_tags)
 	end

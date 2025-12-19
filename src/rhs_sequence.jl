@@ -1,12 +1,10 @@
 # like: MOD_seq_rhs.m 
 # Start: 14.04.2025
 # Last edit: 
-# By: Cedric Meyer 
-# Purpose: ODE system of the sequence module; this ODE deviates from the matlab model by indexing of the efficiency factors and q_R_elo
+# By: Cedric and Arnav 
+# Purpose: ODE system of the sequence module; this ODE deviates from the matlab model by indexing of the efficiency factors and tags.tags.q_R_elo
 
 function rhs_sequence!(du, u, p)
-
-
 
     # du = zeros(Float64, length(u))
     tags = p
@@ -27,38 +25,34 @@ function rhs_sequence!(du, u, p)
     tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, 
     r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, S70, rna, PRT, PTC = u 
 
-    RNA = tags.RNA
-
-    # Containers 
-    num_species = length(tags.species_and_sequences.Name)
-    len_sequence = length(tags.species_and_sequences.Seq) # Codon length with stop codon
 
     # Define RIB1
     
-    rate_RIB        = zeros(Float64, len_sequence-1);
+    fill!(tags.rate_RIB, 0.0)
+
     @views c_RIB	= u[tags.idx_first_codon:end]     
 
-    @views total_RNA   = RNA + sum(c_RIB[1:12])
+    @views total_RNA   = tags.RNA + sum(c_RIB[1:12])
 
-    q_R_elo     = ones(len_sequence-1);
+    fill!(tags.q_R_elo, 1.0)
         
-    @views for i in 2:(len_sequence - 13)
+    @views for i in 2:(tags.len_sequence - 13)
 
         if total_RNA-sum(c_RIB[i:i+12]) == 0
 
-            q_R_elo[i] 	= 0;
+            tags.q_R_elo[i] 	= 0;
         else
-            q_R_elo[i] 	= 1 - c_RIB[i+12] / (total_RNA-sum(c_RIB[i:i+11]));
+            tags.q_R_elo[i] 	= 1 - c_RIB[i+12] / (total_RNA-sum(c_RIB[i:i+11]));
         
         end
     end 
 
 
-    @views for i in (len_sequence-13) : (len_sequence-1)
+    @views for i in (tags.len_sequence-13) : (tags.len_sequence-1)
         if total_RNA - sum(c_RIB[i : end]) == 0
-            q_R_elo[i] = 0
+            tags.q_R_elo[i] = 0
         else 
-            q_R_elo[i] = 1 - (c_RIB[end] + PTC) / (total_RNA - sum(c_RIB[i:end-1]))
+            tags.q_R_elo[i] = 1 - (c_RIB[end] + PTC) / (total_RNA - sum(c_RIB[i:end-1]))
         end
     end
 
@@ -71,15 +65,15 @@ function rhs_sequence!(du, u, p)
         
 
     # V_EL
-    C_vect = reshape(u[1:num_species], 1, num_species)  # Directly assign
+    C_vect = reshape(u[1:tags.num_species], 1, tags.num_species)  # Directly assign
     c_Codon = tags.t3_Codon_struc * C_vect'
 
-    V_TL_EL	= zeros(len_sequence-1);
+    V_TL_EL	= zeros(tags.len_sequence-1);
 
     EGT_inv = inv(EGT)
 
 
-    @inbounds for i in 1:len_sequence-2
+    @inbounds for i in 1:tags.len_sequence-2
 
         cod_next = tags.species_and_sequences.Seq[i+1]
         cod_curr = tags.species_and_sequences.Seq[i]
@@ -97,7 +91,7 @@ function rhs_sequence!(du, u, p)
             denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
 
             V_TL_EL[i+1] =
-                q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
+                tags.q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
         end
     end
 
@@ -106,29 +100,21 @@ function rhs_sequence!(du, u, p)
     c_codon_seq = c_Codon[tags.matrix_N]
     N= C_vect' * (1 ./c_codon_seq)'
 
-    M = zeros(size(N))
-    for k in 1:size(N,2)
-        for i in 1:size(N,1)
-            M[i,k] = tags.alpha_struc[i,k] * N[i,k]
-        end
-    end
+    fill!(tags.M, 0.0)
 
-    K_T3 = M*V_TL_EL;
+    tags.M .= tags.alpha_struc .* N 
 
+    K_T3 = tags.M*V_TL_EL
 
-    mtRNA 		= zeros(size(M,1),2);
-    M_tRNA 		= hcat(mtRNA,M)
-    M_tRNA		= M_tRNA[:, Not(3)]
-    M_tRNA		= M_tRNA[:, 1:end-1]
+    M_tRNA = @view tags.M[:,2:end-1]
+    V_TL_EL_subset = @view V_TL_EL[3:end]
 
-    K_tRNA 		= M_tRNA*V_TL_EL   
+    K_tRNA = M_tRNA * V_TL_EL_subset # unloaded tRNA released by T3 complex consumptions
 
-
-
-    ##########################################################
+  
       
     ## translation termination
-    te = len_sequence-1 # Number of last coding codon
+    te = tags.len_sequence-1 # Number of last coding codon
     # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
 
     k_RF1_diss_GTP = k_RF1_diss_GTP#*tags.scale.termination
@@ -164,11 +150,11 @@ function rhs_sequence!(du, u, p)
 
     # translation termination - calculation of du 
 
-    @inbounds for i in 1:num_species
+    @inbounds for i in 1:tags.num_species
         du[i] += tags.alpha_struc[i, end] * V_TL_TE
     end
 
-    rate_RIB[len_sequence-1] -= V_TL_TE
+    tags.rate_RIB[tags.len_sequence-1] -= V_TL_TE
 
 
     du[tags.idx.PTC] += V_TL_TE - k_rec_min * PTC;	            # PTC
@@ -185,28 +171,28 @@ function rhs_sequence!(du, u, p)
 
 
     # concentration of the ribosome at the specific codon
-    rate_RIB[1] = - V_TL_EL[2];  
+    tags.rate_RIB[1] = - V_TL_EL[2];  
 
-    for i in 2: len_sequence-2
-        rate_RIB[i] = V_TL_EL[i] - V_TL_EL[i+1];	
+    for i in 2: tags.len_sequence-2
+        tags.rate_RIB[i] = V_TL_EL[i] - V_TL_EL[i+1];	
     end
 
-    rate_RIB[len_sequence-1] = rate_RIB[len_sequence-1] + V_TL_EL[end];
+    tags.rate_RIB[tags.len_sequence-1] = tags.rate_RIB[tags.len_sequence-1] + V_TL_EL[end];
 
     # concentration of the unloaded tRNA
     du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
 
     # concentration of the ternary-complex
-    du[1: num_species] .+= - K_T3;
+    du[1: tags.num_species] .+= - K_T3;
     du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
     du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
-    # du[tags.idx.RNA] += + V_TL_EL[12];
+
     du[tags.idx.rna] += - V_TL_EL[12];
 
 
 
     # save RIB in du
-    du[tags.idx_first_codon:end] .+= rate_RIB;
+    du[tags.idx_first_codon:end] .+= tags.rate_RIB;
 
     return du
 end
