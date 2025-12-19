@@ -36,29 +36,7 @@ function rhs_sequence!(du, u, p)
     # Define RIB1
     
     rate_RIB        = zeros(Float64, len_sequence-1);
-    @views c_RIB	= u[tags.idx_first_codon:end]
-
-    # Transcription -----------------
-
-    # Free mRNA (RNA) levels are given by a starting value to implement mRNA concentrations from transcriptomics measurements
-
-    # No transcription modeling, if mRNA is given for whole cell transcriptome
-
-    # # # tQSSR model used in Spindler
-
-    # V_TCmax 	= k_cat_Pol * C_RNP
-    # V_degmax    = k_cat_E * C_RNE
-
-    # du[tags.idx.RNA] += (V_TCmax/(len_sequence*3) * C_D * tags.scale.V_TC_scale / ( K_M_D * (1 + (n_DNA_t-n_DNA_s)* 0.001/K_M_D)+ C_RNP + C_D * tags.scale.V_TC_scale )) - 
-    # (V_degmax * RNA / (K_M_deg  + C_RNE + RNA ))	# 170
-
-    ## translation elongation ----------------------------------------
-
-    #= queuing factor q_R_elo
-        Nieß 2017:
-        Any influence of ribosomal hindrance was incorporated by applying a queuing factor q_R_elo,
-        which reduces the elongation rate with increasing ribosome density. For an elongation step from codon 
-        j to j+1, the queuing factor corresponds to the density of ribosomes on  the 12 codons further downstream. =#         
+    @views c_RIB	= u[tags.idx_first_codon:end]     
 
     @views total_RNA   = RNA + sum(c_RIB[1:12])
 
@@ -164,44 +142,7 @@ function rhs_sequence!(du, u, p)
 
 
     ##########################################################
-
-    ## translation termination
-    te = len_sequence-1 # Number of last coding codon
-    # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
-
-    k_RF1_diss_GTP = k_RF1_diss_GTP#*tags.scale.termination
-
-    efficiency_term = 1;
-    k_ter_RF1 = 1 / ( 1/(k_RF1_ass*RFt) + 1/(k_RF1_diss_GTP) );
-    k_ter_RF3 = 1 / ( 1/(k_RF1_ass*RGT) + 1/(k_RF3_diss_GDP) + 1/(k_GTP_hydr) );
-
-    
-
-    if k_ter_RF1 < k_ter_RF3
-        k_ter = k_ter_RF1;
-    else
-        k_ter = k_ter_RF3;
-    end
-
-    V_TE_max = k_ter * RFt   # RFt is RF1/2 total
-    V_TL_TE = V_TE_max * efficiency_term / (1 + KM_RK/ c_RIB[te] + KM_RF3GTP/RGT + KM_RK * KM_RF3GTP /(c_RIB[te] * RGT))
-        
-    if c_RIB[te] == 0 || GTP == 0
-        V_TL_TE=0;
-    end
-
-
-    V_RF3_GDP_ass  = k_RF3_GDP_ass  * RF3 * GDP;
-    V_RF3_GTP_ass  = k_RF3_GTP_ass  * RF3 * GTP;
-    V_RF3_GDP_diss = k_RF3_GDP_diss * RGD;
-    V_RF3_GTP_diss = k_RF3_GTP_diss * RGT 
-
-    ## post termination complex recycling
-    t_rec = A1 + A2 * 1/RRF + A3 * EGT/RRF + A4 * 1/EGT + A5 * 1/(RRF*EGT); # time/s for recycling according to Borg et al. 2016
-    k_rec = 1/t_rec; # rate/s^-1 for recycling according to Borg et al. 2016
-    k_rec_min = k_rec*60; # rate/min^-1 for recycling according to Borg et al. 2016
-    f_s = k_cat_K_M_G1/(k_RRF * RRF)*(q_RRF/k_cat_K_M_G2*one_q_G2_k_split + EGT)+ one_q_G2_k_split; #EGT hydrolised per splitting event according to Borg et al 2016
-        
+      
     ## translation termination
     te = len_sequence-1 # Number of last coding codon
     # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
