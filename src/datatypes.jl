@@ -456,7 +456,7 @@ struct data_struct_integration
 	sequence_name::String
 	Tags::Vector{SubString{String}}
 	alpha_struc::Matrix{Float64}
-	matrix_N::Matrix{Float64}
+	matrix_N::Vector{Int32}
 	tRNA_charg::Matrix{Float64}
 	t3_Codon_struc::Matrix{Float64}
 	efac_pos_aa::Vector{Float64}

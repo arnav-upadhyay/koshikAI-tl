@@ -1126,7 +1126,7 @@ function N_generation(tags, sequence)
 	# Function   : generation of N
 	# Written by : Maike Kuschel
 	# Created on : 15/04/2015
-	# Last Update: 25/03/2025 Translation to julia
+	# Last Update: 25/03/2025 Translation to julia, 10.12.2025 now it gives a vector with indices instead of a sparse matrix
 	# Purpose    : generate array to calculate the tRNA (release) and T3 (consumption) concentration  
 
 	# matrix_N : rows = length of codon sequence; columns = number of all
@@ -1136,15 +1136,19 @@ function N_generation(tags, sequence)
 	# generates only entries in matrix_N, if the codons fit with the
 	# sequence)
 
-	matrix_N = zeros(length(sequence)-1, size(tags.species_and_sequences.cod,1)-1)
+    sequence = sequence[1:end-1]
 
-	for i = 1:size(sequence,1)-1
-		for j = 1:size(tags.species_and_sequences.cod,1)-1
-			if String(sequence[i]) == tags.species_and_sequences.cod[j]
-				matrix_N[i,j] = 1
-			end
-		end
-	end
+    matrix_N = Vector{Int32}(undef, length(sequence))
+
+    for i in eachindex(sequence) 
+
+        for j = 1:size(tags.species_and_sequences.cod,1)-1
+
+            if String(sequence[i]) == tags.species_and_sequences.cod[j]
+                matrix_N[i] = j
+            end
+        end
+    end
 	
 	return matrix_N
     

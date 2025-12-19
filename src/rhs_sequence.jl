@@ -103,9 +103,8 @@ function rhs_sequence!(du, u, p)
 
     V_TL_EL_sum = sum(V_TL_EL);
 
-    c_codon_seq = tags.matrix_N * c_Codon
-
-    N = C_vect[1,:] * (1 ./c_codon_seq)'
+    c_codon_seq = c_Codon[tags.matrix_N]
+    N= C_vect' * (1 ./c_codon_seq)'
 
     M = zeros(size(N))
 
