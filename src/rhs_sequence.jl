@@ -107,20 +107,6 @@ function rhs_sequence!(du, u, p)
 
     N = C_vect[1,:] * (1 ./c_codon_seq)'
 
-    # Replace Inf values with 0
-    @inbounds for i in eachindex(N)
-        if isinf(N[i])
-            N[i] = 0
-        end
-    end
-
-    # Replace NaN values with 0
-    @inbounds for i in eachindex(N)
-        if isnan(N[i])
-            N[i] = 0
-        end
-    end
-
     M = zeros(size(N))
 
     for i in 1:size(N,1)
