@@ -1049,7 +1049,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 
 		# numbers and arrays for rhs_sequence
 		num_species 	= length(tags.species_and_sequences.Name)
-		len_sequence 	= length(tags.species_and_sequences.Seq) # Codon length with stop codon 
+		len_sequence 	= length(sequence) # Codon length with stop codon 
 		rate_RIB        = zeros(Float64, len_sequence-1)
 		q_R_elo     	= ones(len_sequence-1)
 		M 				= zeros(num_species, len_sequence-1)
