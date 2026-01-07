@@ -971,6 +971,44 @@ end
 
 #--------------- local tags list -------------------------------------
 
+"""
+	generate_p(local_tags_list)
+
+09.12.2025, generates a struct that has local tags list and initialized vectors for ODE_parallel_distributed
+"""
+
+function generate_p(local_tags_list)
+
+    # Initialiization of vectors and lists
+    y_codons_lengths    = Vector{Int}(undef, length(local_tags_list))   # Initialization
+    @inbounds for i in eachindex(local_tags_list)                                     # List with sequence lengths - 1 stop codon + 4 observable variables
+        y_codons_lengths[i] = length(local_tags_list[i].species_and_sequences.Seq) + 3
+    end	
+
+	offsets = cumsum(vcat(0, y_codons_lengths[1:end-1]))
+
+    n_metab = length(local_tags_list[1].species_and_sequences.Tag) -4     # number of metabolites in the shared pool that is used by all sequences 
+    n_seq   = local_tags_list[1].species_and_sequences.no_of_seqs 		                # save number of sequences
+
+    du_metab_all    = [zeros(n_metab) for _ in 1:n_seq]             # Initialization - List to store a du vector for the metabolite pool for every sequence 
+    du_codons       = Vector{Vector{Float64}}(undef, n_seq)	        # Initialization - List to store a du vector for the codons for every sequence     
+    y_codons        = Vector{Vector{Float64}}(undef, n_seq)			# Initialization
+    results         = Vector{Vector{Float64}}(undef, n_seq)         # Initialization - List to store all sequence specific metabolite du and codon du
+
+    du_seq          = Vector{Vector{Float64}}(undef, n_seq)	        # Initialization - List to store a du vector for the codons for every sequence     
+    for (i,y_length) in enumerate(y_codons_lengths)
+        L = y_length+n_metab
+        du_seq[i] = zeros(L)
+    end   
+
+	du_metab = zeros(n_metab)
+
+    vectors = txtl_types.vectors(y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab)
+
+    p = txtl_types.parameters(local_tags_list, vectors)
+
+    return p 
+end
 
 """
 	generate_local_tags(seqs, seq_names, tags)
@@ -1009,10 +1047,21 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 
 		mRNA_concentration = filter(row -> row.gene == seq_name, mRNA).mRNA[]
 
+		# numbers and arrays for rhs_sequence
+		num_species 	= length(tags.species_and_sequences.Name)
+		len_sequence 	= length(sequence) # Codon length with stop codon 
+		rate_RIB        = zeros(Float64, len_sequence-1)
+		q_R_elo     	= ones(len_sequence-1)
+		M 				= zeros(num_species, len_sequence-1)
+		mtRNA 			= zeros(size(M,1),2);
 		
-		local_tags 		= txtl_types.data_struct_integration(tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff, 
-																tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name, Tags, alpha_struc, 
-																matrix_N, tRNA_charg, t3_Codon_struc, efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration)
+		local_tags 		= txtl_types.data_struct_integration(
+			tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff,
+			tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name,
+			Tags, alpha_struc, matrix_N, tRNA_charg, t3_Codon_struc, 
+			efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration,
+			num_species, len_sequence, rate_RIB, q_R_elo, M, 
+			mtRNA)
 
 		push!(local_tags_list, local_tags)
 	end
@@ -1088,7 +1137,7 @@ function N_generation(tags, sequence)
 	# Function   : generation of N
 	# Written by : Maike Kuschel
 	# Created on : 15/04/2015
-	# Last Update: 25/03/2025 Translation to julia
+	# Last Update: 25/03/2025 Translation to julia, 10.12.2025 now it gives a vector with indices instead of a sparse matrix
 	# Purpose    : generate array to calculate the tRNA (release) and T3 (consumption) concentration  
 
 	# matrix_N : rows = length of codon sequence; columns = number of all
@@ -1098,15 +1147,19 @@ function N_generation(tags, sequence)
 	# generates only entries in matrix_N, if the codons fit with the
 	# sequence)
 
-	matrix_N = zeros(length(sequence)-1, size(tags.species_and_sequences.cod,1)-1)
+    sequence = sequence[1:end-1]
 
-	for i = 1:size(sequence,1)-1
-		for j = 1:size(tags.species_and_sequences.cod,1)-1
-			if String(sequence[i]) == tags.species_and_sequences.cod[j]
-				matrix_N[i,j] = 1
-			end
-		end
-	end
+    matrix_N = Vector{Int32}(undef, length(sequence))
+
+    for i in eachindex(sequence) 
+
+        for j = 1:size(tags.species_and_sequences.cod,1)-1
+
+            if String(sequence[i]) == tags.species_and_sequences.cod[j]
+                matrix_N[i] = j
+            end
+        end
+    end
 	
 	return matrix_N
     
@@ -1230,63 +1283,72 @@ end
 
 
 # 3. Define the ODE function for solving (THREADED VERSION - only change: map -> Threads.@threads)
+"""
+Explanation of function:
+
+Aim: Enable parallel computing of du for multiple sequences.
+
+1. Create sequence specific states vector (u) 
+- Generate numbers to access certain parts of u
+- Generate parts of u that need to be assembled per specific to the sequence. This is the metabolite pool and the codons of a specific sequence.
+
+2. Compute rates vector (du)
+- Put together metabolite pool and codon vector, initialize du
+- Give those sequence specific vectors to the ODE! function 
+- Save sequence specific result in list 
+
+3. Construction of one du for all sequences 
+- Save all metabolite and codon du vectors in lists
+- Summation of du metabolites 
+- Combining du metabolites with all du of codons 
+"""
 
 function ODE_parallel_distributed!(du, u, p, t)
-    local_tags_list = p				# Extraction of local_tags_list from p
-    tags            = local_tags_list[1]
-    n_metab = length(tags.species_and_sequences.Tag) -4 		# number of metabolites in the shared pool that is used by all sequences 
-    @views y_metab =  u[1:n_metab]				# Save all pool species from u in a vector 
-    idx = n_metab						# Index of last pool species
 
 
-	y_codons_lengths = Int[length(local_tags_list[i].species_and_sequences.Seq) + 3 for i in eachindex(local_tags_list)]	# List with sequence lengths - 1 stop codon + 5 observable variables
+    # Vectors and numbers 
+    @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab = p.vectors
 
+    # Generate parts of u that need to be assembled specific to the sequence   
+    @views u_metab =  u[1:n_metab]				                            # Save all pool species from u in a vector 
 
-	y_codons = Vector{SubArray{Float64,1,typeof(u),Tuple{UnitRange{Int64}},true}}(undef, length(y_codons_lengths))
-    idx = n_metab
-    @views for (i,L) in enumerate(y_codons_lengths)
-        y_codons[i] = u[idx+1:idx+L]  # ✅ View statt Kopie
-        idx += L
+    # thread-local accumulator for du[1:start]
+    du_head_threads = [zero(u_metab) for _ in 1:Threads.nthreads()]
+
+    Threads.@threads for i in 1:n_seq				                        # Threading instead of map, # ONLY CHANGE: map -> Threads.@threads for  
+        tid = Threads.threadid()
+
+        local_tags = p.local_tags_list[i]		                            # Extraction of local tags
+        idx = n_metab + offsets[i]                                          # Create index to access u on the sequence specific indexes
+        len = y_codons_lengths[i]            
+        
+        # thread-safe local views
+        u_codons = @view u[idx+1 : idx+len]
+
+        # assemble without allocation
+        u_seq = similar(u, n_metab + len)
+        @views u_seq[1:n_metab] .= u_metab
+        @views u_seq[n_metab+1:end] .= u_codons
+
+        du_seq_local = du_seq[i]					                        # Initialization of sequence specific rates vector
+
+        ODE!(du_seq_local, u_seq, local_tags, t)	                        # Give those sequence specific vectors to the ODE! function  
+
+        # thread-local accumulation
+        @views du_head_threads[tid] .+= du_seq_local[1:n_metab]               # Save du results from sequence specific ODEs to common rates vector
+
+        @views du[idx+1:idx+len] .= du_seq_local[n_metab+1:end]
     end
 
-    
-    n_seq = tags.species_and_sequences.no_of_seqs 		# save number of sequences
-    du_metab_all = [zeros(n_metab) for _ in 1:n_seq]	# List to store a du vector for the metabolite pool for every sequence 
-    du_codons = Vector{Vector{Float64}}(undef, n_seq)	# List to store a du vector for the codons for every sequence 
-
-    # THREADED parallelization of per-sequence rate calculations
-    # ONLY CHANGE: map -> Threads.@threads for
-    results = Vector{Vector{Float64}}(undef, n_seq)  # Pre-allocate results array
-    Threads.@threads for i in 1:n_seq						    # Threading instead of map
-        local_tags = local_tags_list[i]		# Extraction of local tags
-        u_seq = vcat(y_metab, y_codons[i])				# Sequenzspezifischer state vector
-        du_seq = zeros(length(u_seq))					# Sequenzspezifischer rates vector
-        ODE!(du_seq, u_seq, local_tags, t)	            # Aufruf des ODE systems
-        results[i] = du_seq								# Store result directly (thread-safe)
-    end
-    
-    @views for i in 1:n_seq								# Loop over number of sequences
-        du_metab_all[i] .= results[i][1:n_metab]	    # Abspeichern aller rates der Metabolite 
-        du_codons[i] = results[i][n_metab+1:end]		# Abspeichern aller rates für die Ribosomen
+    # Add up du for metabolites for all sequences
+    du[1:n_metab] .= 0
+    for acc in du_head_threads
+        @views du[1:n_metab] .+= acc
     end
 
-    du_metab = zeros(n_metab)						    # Summation der n_metab du
-
-    for i in 1:n_seq
-        du_metab .+= du_metab_all[i]
-    end
-
-    @views du[1:n_metab] .= du_metab                    # Zusammensetzung des gesamten rates vectors
-
-    idx = n_metab
-    for i in 1:n_seq
-        len = length(du_codons[i])
-        @views du[idx+1:idx+len] .= du_codons[i]
-        idx += len
-    end			
-
-    return nothing
+    return nothing 
 end
+
 
 # ---------------------------- figures -----------------------------------------
 

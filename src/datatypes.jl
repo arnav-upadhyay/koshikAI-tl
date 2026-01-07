@@ -430,27 +430,56 @@ end
 
 # ----------------------------- Integration ---------------------------------------
 
+struct vectors
+    y_codons_lengths::Vector{Int}
+	offsets::Vector{Int}
+    n_metab::Int64 
+    n_seq::Int64 
+    du_metab_all::Vector{Vector{Float64}}
+    du_codons::Vector{Vector{Float64}}
+    y_codons::Vector{Vector{Float64}}
+    results::Vector{Vector{Float64}}
+	du_seq::Vector{Vector{Float64}}
+	du_metab::Vector{Float64}
+end
+
 struct data_struct_integration 
 	scale::scale
     idx::indices_dynamic_variables
     species_and_sequences::species_and_sequences
     flags::flags
 	dyn_eff::dynamic_efficiency_factors
+
     init_c::initial_concentration
     p_met::parameters_metabolites
     p_seq::parameters_sequence
 	p_dyn::parameters_dynamic_efficiency
 	sequence_name::String
+
 	Tags::Vector{SubString{String}}
 	alpha_struc::Matrix{Float64}
-	matrix_N::Matrix{Float64}
+	matrix_N::Vector{Int32}
 	tRNA_charg::Matrix{Float64}
 	t3_Codon_struc::Matrix{Float64}
+	
 	efac_pos_aa::Vector{Float64}
 	efac_int_sd::Vector{Float64}
 	seq_names::Vector{String}
 	idx_first_codon::Int32
 	RNA::Float64
+
+	num_species::Int64
+	len_sequence::Int64
+	rate_RIB::Vector{Float64}
+	q_R_elo::Vector{Float64}
+	M::Matrix{Float64}
+	
+	mtRNA::Matrix{Float64}
+end
+
+struct parameters 
+	local_tags_list::Vector{data_struct_integration}
+	vectors::vectors
 end
 
 end # of module
