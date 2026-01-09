@@ -832,6 +832,16 @@ function preintegration(tags, y0, M)
 
 	y_steady_state[1:end] = sol[end]
 
+	# CRITICAL FIX: Clamp physically non-negative species to prevent negative values
+	# Negative S70 (free 70S ribosome pool) was causing multi-sequence simulations to fail
+	# When S70 goes negative in preintegration, it propagates to all sequences in y0_all
+	# This ensures the steady-state vector is physically valid before being used
+	y_steady_state[tags.idx.S70] = max(y_steady_state[tags.idx.S70], 0.0)
+	
+	# Also clamp rna (transcribed RNA) to ensure non-negative
+	# RNA/rna are output species that should also be non-negative
+	y_steady_state[tags.idx.rna] = max(y_steady_state[tags.idx.rna], 0.0)
+
 
 	return y_steady_state
 
