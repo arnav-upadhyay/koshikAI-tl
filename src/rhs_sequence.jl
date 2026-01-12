@@ -97,21 +97,23 @@ function rhs_sequence!(du, u, p)
 
     V_TL_EL_sum = sum(V_TL_EL);
     c_codon_seq = c_Codon[tags.matrix_N]
-    N= C_vect' * (1 ./c_codon_seq)'
 
-    fill!(tags.M, 0.0)
+    K_T3, K_tRNA, N_one, N_two = matrix_free_KT3(tags, V_TL_EL, c_codon_seq, C_vect)
 
-    tags.M .= tags.alpha_struc .* N 
+    # N= C_vect' * (1 ./c_codon_seq)'
 
-    K_T3 = tags.M*V_TL_EL
+    # fill!(tags.M, 0.0)
 
-    M_tRNA = @view tags.M[:,2:end-1]
-    V_TL_EL_subset = @view V_TL_EL[3:end]
+    # tags.M .= tags.alpha_struc .* N 
 
-    K_tRNA = M_tRNA * V_TL_EL_subset # unloaded tRNA released by T3 complex consumptions
+    # K_T3 = tags.M*V_TL_EL
 
-  
-      
+    # M_tRNA = @view tags.M[:,2:end-1]
+    # V_TL_EL_subset = @view V_TL_EL[3:end]
+
+    # K_tRNA = M_tRNA * V_TL_EL_subset # unloaded tRNA released by T3 complex consumptions
+
+       
     ## translation termination
     te = tags.len_sequence-1 # Number of last coding codon
     # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
@@ -149,8 +151,14 @@ function rhs_sequence!(du, u, p)
 
     # translation termination - calculation of du 
 
-    @inbounds for i in 1:tags.num_species
-        du[i] += tags.alpha_struc[i, end] * V_TL_TE
+    # @inbounds for i in 1:tags.num_species
+    #     du[i] += tags.alpha_struc[i, end] * V_TL_TE
+    # end
+
+    du[tags.alpha_one[end]] += N_one[tags.alpha_one[end]] * V_TL_TE
+
+    if tags.alpha_two[end] != 0
+        du[tags.alpha_two[end]] += N_two[tags.alpha_two[end]] * V_TL_TE
     end
 
     tags.rate_RIB[tags.len_sequence-1] -= V_TL_TE
