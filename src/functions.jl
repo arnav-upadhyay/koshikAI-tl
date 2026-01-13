@@ -207,7 +207,7 @@ end
 # ------------------Efficiency factor initialization -------------------------------------------------------------------------------
 
 
-function efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs)
+function efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs, flags)
 
 	# Scan for sequence features
 
@@ -1651,6 +1651,25 @@ function calculate_translation_rate(df)
 
 end
 
+"""
+	protein_production(sol, tags)
+
+16/05/2025 Cedric Meyer 
+Calculates the translation rate at timepoint 100
+"""
+
+function protein_production(sol, p)
+	# Zustand zum Zeitpunkt t
+	t_query = 100.0
+	u_t = sol(t_query)
+
+	# Raten zum Zeitpunkt t berechnen
+	du_t = similar(u_t)  # Speicher für Ableitungen
+	ODE!(du_t, u_t, p, t_query)
+
+	return du_t[p.local_tags_list[1].idx.PRT]
+end
+
 function save_results(sol, local_tags_list, save_data)
 	
 	if save_data == true
@@ -1716,24 +1735,52 @@ end
 # ---------------------- Model validation ----------------------------------
 
 """
-	competition_model()
+	call_model(sequence_file, heterologous_genes, num_background_genes)
 
 01.12.2025; Model wrapped in a function to call it with one line.
 """
 
-function competition_model(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use, mRNA)
+function call_model(sequence_file, heterologous_genes, num_background_genes)
+
+	include("parameters.jl")
+	
+	hybrid_file		    = "lacS.txt"
+	seqs_to_use 	    = (1,2323)                                 # Range of sequences in Fasta file. Takes all sequences from sequence a to sequence b
+
+	# initialization of data containers
+	scale = txtl_types.init_scale()         # struct that makes it possible to influence rates by scaling them
+
+	µ = 1                    # A growth rate (0.1 to 1.8) can be chosen and the proteins of the TXTL machinery will be tuned according to that growth rate and the processivity of the RNA polymerase
+
+	## flags for efficiency factors
+	positive_aminoacid	= true 
+	anti_shinedalgarno	= false      # If no hybridization file is available put flag to false. We apply the intaRNA program's intarna function (q: aSD, t: sequence, SeedBP: 5, out: tMinE) to generate a hybridization profile along the sequence. Link to the website: https://rna.informatik.uni-freiburg.de/IntaRNA/Input.jsp;jsessionid=2AE257E91E7276283F22CD77A5A8AA03
+	dynamic_efficiency	= true 
+	save_data           = false
+
+	flags = txtl_types.flags(positive_aminoacid, anti_shinedalgarno, dynamic_efficiency)
+
+	# Data import --------
+	mRNA 		= to_DataFrame(readmatrix("../data/input/mRNA_concentrations.xlsx", "mRNA_concentration", "A1:B2402"))
+	mRNA.mRNA 	= Float64.(mRNA.mRNA);
+
+	background_genes = String.(first(mRNA.gene, num_background_genes))
+	genes = vcat(background_genes, heterologous_genes)
+	println("Number of sequences: $(length(genes))") 
+
+	mRNA = subset(mRNA, :gene => ByRow(in(genes)))
+
 	## Import information about model sp ecies and sequences 
 	seqs, seq_names, hyb_file_dict, species_and_seqs, idx = species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seqs_to_use)
-	# Are mRNA gene names in E_coli gene 
 
 	## Calculate efficiency factors 
-	efac_pos_aa_dict, efac_int_sd_dict, dynamic_efficiencies = efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs)
+	efac_pos_aa_dict, efac_int_sd_dict, dynamic_efficiencies = efficiency_factor_initialization(seqs, seq_names, hyb_file_dict, species_and_seqs, flags)
 
 	## calculation of initial concentrations
 	y0, initial_concentrations = calculation_of_initial_concentration(species_and_seqs, seqs, seq_names, scale, idx);
 
 	## calculate and load kinetic parameters
-	p_met, p_seq, p_dyn = parameters(initial_concentrations, species_and_seqs);
+	p_met, p_seq, p_dyn = parameters(initial_concentrations, species_and_seqs, scale, µ);
 
 	## Release factor balance
 	RF_balance!(y0, initial_concentrations)
@@ -1760,34 +1807,35 @@ function competition_model(genes, µ, sequence_file, hybrid_file, flags, seqs_to
 	# Build states vector for multiple sequences 
 	y0_all = combined_states_vector(tags_pre, y_steady_state, seqs, seq_names)
 
-	# include_mRNA_concentrations!(y0_all, tags_pre, seq_names, seqs, mRNA)
-
 	# Prepare per-sequence tags (for use in ODE)
 	local_tags_list = generate_local_tags(seqs, seq_names, tags_pre, efac_pos_aa_dict, efac_int_sd_dict, mRNA);
 
-	# Integration
-	M = Matrix{Float64}(I, length(y0_all), length(y0_all))
 
-	M[conserved, :] .= 0
+	# Integration
+	# PERFORMANCE FIX: Use Diagonal mass matrix instead of dense matrix
+	# For 100 sequences with ~22k states, dense matrix would be ~4GB and cause O(n³) scaling
+	n_all = length(y0_all)
+	mass_diag_all = ones(Float64, n_all)
+	mass_diag_all[conserved] .= 0.0
+	M = Diagonal(mass_diag_all)  # Much more memory-efficient: O(n) instead of O(n²)
 
 	tspan 	= (0.0, 100.0) ## Define time span for the simulation
 
-	p_parallel = local_tags_list
+	p       = generate_p(local_tags_list)
 
 	f 		= ODEFunction(ODE_parallel_distributed!, mass_matrix = M) ## Define ODEFunction to make use of mass matrix
 
-	prob 	= ODEProblem(f, y0_all, tspan, p_parallel); ## Create an ODE problem
-
-
+	prob 	= ODEProblem(f, y0_all, tspan, p); ## Create an ODE problem
 
 	# --- Timing the integration step ---
-	println("\n⏳ Integrating ODE system (threaded, $(length(seq_names)) sequences)...")
+	println("\n⏳ Integrating ODE system (distributed, test set)...")
 
-	sol = solve(prob, FBDF(autodiff=false), reltol = 1e-8, abstol = 1e-6) ## Solve ODE system
+	sol     = solve(prob, FBDF(autodiff=false), reltol = 1e-8, abstol = 1e-6); ## Solve ODE system
 
 	println("Integration completed!")
 
-	return sol, p_parallel
+
+	return sol, p
 end
 
 

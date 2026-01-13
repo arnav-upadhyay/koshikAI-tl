@@ -3,7 +3,7 @@
 # By: Cedric Meyer 
 # Purpose: Contains the parameters for the metabolite module
 
-function parameters(initial_concentrations, species_and_seqs)
+function parameters(initial_concentrations, species_and_seqs, scale, µ)
     
     ## mod_met_kinetics
 
