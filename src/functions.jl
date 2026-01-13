@@ -1043,7 +1043,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		matrix_N 				= N_generation(tags, sequence)
 		tRNA_charg 				= tRNAcharging(tags)
 		t3_Codon_struc 			= sum_of_t3complex(tags)
-		
+
 		# Efficiency factors
 		efac_pos_aa 		= efac_pos_aa_dict[seq_name]
 		efac_int_sd 	    = efac_int_sd_dict[seq_name]
@@ -1064,14 +1064,19 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 		q_R_elo     	= ones(len_sequence-1)
 		M 				= zeros(num_species, len_sequence-1)
 		mtRNA 			= zeros(size(M,1),2);
-		
+
+		N_one 	= zeros(len_sequence-1)
+		N_two 	= zeros(len_sequence-1)
+		K_T3 	= zeros(num_species)
+		K_tRNA 	= zeros(num_species) 
+
 		local_tags 		= txtl_types.data_struct_integration(
 			tags.scale, tags.idx, species_and_seqs, tags.flags, tags.dyn_eff,
 			tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name,
 			Tags, alpha_one, alpha_two, matrix_N, tRNA_charg, t3_Codon_struc, 
 			efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration,
 			num_species, len_sequence, rate_RIB, q_R_elo, M, 
-			mtRNA)
+			mtRNA, N_one, N_two, K_T3, K_tRNA)
 
 		push!(local_tags_list, local_tags)
 	end
@@ -1390,61 +1395,64 @@ end
 12.01.2026 Cedric Meyer, Calculates rates vectors K_tRNA and K_T3
 """
 
-function matrix_free_KT3(tags, V_TL_EL, c_codon_seq, C_vect)
+function matrix_free_KT3!(tags, V_TL_EL, c_codon_seq, C_vect)
     
     ### Division of tRNA concentration by codon concentration # ---------------------------------------------------------------------
 
-    N_one = zeros(tags.len_sequence-1)
-    N_two = zeros(tags.len_sequence-1)
+	fill!(tags.N_one, 0.0)
+	fill!(tags.N_two, 0.0)
+	fill!(tags.K_T3, 0.0)
+	fill!(tags.K_tRNA, 0.0)
+
     # N_three = zeros(tags.len_sequence-1)
 
     counter = 0
-    for (index, c_codon) in zip(tags.alpha_one, c_codon_seq)
+    @inbounds for (index, c_codon) in zip(tags.alpha_one, c_codon_seq)
         counter += 1
-        N_one[counter] = C_vect[index] / c_codon
+        tags.N_one[counter] = C_vect[index] / c_codon
     end
 
     counter = 0
-    for (index, c_codon) in zip(tags.alpha_two, c_codon_seq)
+    @inbounds for (index, c_codon) in zip(tags.alpha_two, c_codon_seq)
         if index != 0.0
             counter += 1
-            N_two[counter] = C_vect[index] / c_codon
+            tags.N_two[counter] = C_vect[index] / c_codon
         elseif index ==0.0
             counter += 1
-            N_two[counter] = 0.0
+            tags.N_two[counter] = 0.0
         end
     end
 
-    K_T3 = zeros(tags.num_species) # ---------------------------------------------------------------------
-    for (codon_position, tRNA_position) in enumerate(tags.alpha_one) 
-        K_T3[tRNA_position] += N_one[codon_position]*V_TL_EL[codon_position]
+     # ---------------------------------------------------------------------
+    @inbounds for (codon_position, tRNA_position) in enumerate(tags.alpha_one) 
+        tags.K_T3[tRNA_position] += tags.N_one[codon_position]*V_TL_EL[codon_position]
     end
 
-    for (codon_position, tRNA_position) in enumerate(tags.alpha_two)
+    @inbounds for (codon_position, tRNA_position) in enumerate(tags.alpha_two)
         if tRNA_position != 0 
-            K_T3[tRNA_position] += N_two[codon_position]*V_TL_EL[codon_position]
+            tags.K_T3[tRNA_position] +=tags.N_two[codon_position]*V_TL_EL[codon_position]
         end
     end
 
-    K_tRNA = zeros(tags.num_species) # ---------------------------------------------------------------------
+    # ---------------------------------------------------------------------
 
     V_TL_EL_subset  = @view V_TL_EL[3:end] 
-    N_one_subset    = @view N_one[2:end-1]
-    N_two_subset    = @view N_two[2:end-1]
+    N_one_subset    = @view tags.N_one[2:end-1]
+    N_two_subset    = @view tags.N_two[2:end-1]
     alpha_one_subset= @view tags.alpha_one[2:end-1]
     alpha_two_subset= @view tags.alpha_two[2:end-1]
 
-    for (codon_position, tRNA_position) in enumerate(alpha_one_subset) 
-        K_tRNA[tRNA_position] += N_one_subset[codon_position]*V_TL_EL_subset[codon_position]
+    @inbounds for (codon_position, tRNA_position) in enumerate(alpha_one_subset) 
+        tags.K_tRNA[tRNA_position] += N_one_subset[codon_position]*V_TL_EL_subset[codon_position]
     end
 
-    for (codon_position, tRNA_position) in enumerate(alpha_two_subset)
+    @inbounds for (codon_position, tRNA_position) in enumerate(alpha_two_subset)
         if tRNA_position != 0 
-            K_tRNA[tRNA_position] += N_two_subset[codon_position]*V_TL_EL_subset[codon_position]
+            tags.K_tRNA[tRNA_position] += N_two_subset[codon_position]*V_TL_EL_subset[codon_position]
         end
     end
 
-    return K_T3, K_tRNA, N_one, N_two
+    return nothing
 
 end 
 

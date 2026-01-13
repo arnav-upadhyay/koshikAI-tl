@@ -98,7 +98,7 @@ function rhs_sequence!(du, u, p)
     V_TL_EL_sum = sum(V_TL_EL);
     c_codon_seq = c_Codon[tags.matrix_N]
 
-    K_T3, K_tRNA, N_one, N_two = matrix_free_KT3(tags, V_TL_EL, c_codon_seq, C_vect)
+    matrix_free_KT3!(tags, V_TL_EL, c_codon_seq, C_vect)
 
     # N= C_vect' * (1 ./c_codon_seq)'
 
@@ -155,11 +155,18 @@ function rhs_sequence!(du, u, p)
     #     du[i] += tags.alpha_struc[i, end] * V_TL_TE
     # end
 
-    du[tags.alpha_one[end]] += N_one[tags.alpha_one[end]] * V_TL_TE
+    # println("du: ", length(du))
+    # println("N_one: ", length(N_one))
+    # println("V_TL_TE: ", length(V_TL_TE))
+    # println("tags.alpha_one[end]: ", tags.alpha_one[end])
+    # du[tags.alpha_one[end]] += N_one[tags.alpha_one[end]] * V_TL_TE
 
-    if tags.alpha_two[end] != 0
-        du[tags.alpha_two[end]] += N_two[tags.alpha_two[end]] * V_TL_TE
-    end
+
+    du[tags.alpha_one[end]] += V_TL_TE
+
+    # if tags.alpha_two[end] != 0
+    #     du[tags.alpha_two[end]] += N_two[tags.alpha_two[end]] * V_TL_TE
+    # end
 
     tags.rate_RIB[tags.len_sequence-1] -= V_TL_TE
 
@@ -187,10 +194,10 @@ function rhs_sequence!(du, u, p)
     tags.rate_RIB[tags.len_sequence-1] = tags.rate_RIB[tags.len_sequence-1] + V_TL_EL[end];
 
     # concentration of the unloaded tRNA
-    du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
+    du[tags.idx.ta1:tags.idx.ty1] .+= tags.K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
 
     # concentration of the ternary-complex
-    du[1: tags.num_species] .+= - K_T3;
+    du[1: tags.num_species] .+= - tags.K_T3;
     du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
     du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
 

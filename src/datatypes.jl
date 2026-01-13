@@ -478,6 +478,10 @@ struct data_struct_integration
 	M::Matrix{Float64}
 	
 	mtRNA::Matrix{Float64}
+	N_one::Vector{Float64}
+	N_two::Vector{Float64}
+	K_T3::Vector{Float64}
+	K_tRNA::Vector{Float64}
 end
 
 struct parameters 
