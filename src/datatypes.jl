@@ -457,7 +457,10 @@ struct data_struct_integration
 	sequence_name::String
 
 	Tags::Vector{SubString{String}}
-	alpha_struc::Matrix{Float64}
+	# alpha_struc::Matrix{Float64}
+	alpha_one::Vector{Int64}
+	alpha_two::Vector{Int64}
+	# alpha_three::Vector{Int64}
 	matrix_N::Vector{Int32}
 	tRNA_charg::Matrix{Float64}
 	t3_Codon_struc::Matrix{Float64}
@@ -475,6 +478,10 @@ struct data_struct_integration
 	M::Matrix{Float64}
 	
 	mtRNA::Matrix{Float64}
+	N_one::Vector{Float64}
+	N_two::Vector{Float64}
+	K_T3::Vector{Float64}
+	K_tRNA::Vector{Float64}
 end
 
 struct parameters 

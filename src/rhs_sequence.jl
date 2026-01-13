@@ -97,21 +97,10 @@ function rhs_sequence!(du, u, p)
 
     V_TL_EL_sum = sum(V_TL_EL);
     c_codon_seq = c_Codon[tags.matrix_N]
-    N= C_vect' * (1 ./c_codon_seq)'
 
-    fill!(tags.M, 0.0)
+    matrix_free_KT3!(tags, V_TL_EL, c_codon_seq, C_vect)
 
-    tags.M .= tags.alpha_struc .* N 
-
-    K_T3 = tags.M*V_TL_EL
-
-    M_tRNA = @view tags.M[:,2:end-1]
-    V_TL_EL_subset = @view V_TL_EL[3:end]
-
-    K_tRNA = M_tRNA * V_TL_EL_subset # unloaded tRNA released by T3 complex consumptions
-
-  
-      
+     
     ## translation termination
     te = tags.len_sequence-1 # Number of last coding codon
     # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
@@ -149,12 +138,9 @@ function rhs_sequence!(du, u, p)
 
     # translation termination - calculation of du 
 
-    @inbounds for i in 1:tags.num_species
-        du[i] += tags.alpha_struc[i, end] * V_TL_TE
-    end
+    du[tags.alpha_one[end]] += V_TL_TE
 
     tags.rate_RIB[tags.len_sequence-1] -= V_TL_TE
-
 
     du[tags.idx.PTC] += V_TL_TE - k_rec_min * PTC;	            # PTC
     du[tags.idx.S30] += k_rec_min * PTC;                         # rate of 30S release due to recycling
@@ -167,8 +153,6 @@ function rhs_sequence!(du, u, p)
 
     # translation elongation - calculation of du 
 
-
-
     # concentration of the ribosome at the specific codon
     tags.rate_RIB[1] = - V_TL_EL[2];  
 
@@ -179,16 +163,14 @@ function rhs_sequence!(du, u, p)
     tags.rate_RIB[tags.len_sequence-1] = tags.rate_RIB[tags.len_sequence-1] + V_TL_EL[end];
 
     # concentration of the unloaded tRNA
-    du[tags.idx.ta1:tags.idx.ty1] .+= K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
+    du[tags.idx.ta1:tags.idx.ty1] .+= tags.K_tRNA[end-tags.species_and_sequences.no_of_tRNAs+1:end]
 
     # concentration of the ternary-complex
-    du[1: tags.num_species] .+= - K_T3;
+    du[1: tags.num_species] .+= - tags.K_T3;
     du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
     du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
 
     du[tags.idx.rna] += - V_TL_EL[12];
-
-
 
     # save RIB in du
     du[tags.idx_first_codon:end] .+= tags.rate_RIB;
