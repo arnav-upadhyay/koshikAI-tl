@@ -100,20 +100,7 @@ function rhs_sequence!(du, u, p)
 
     matrix_free_KT3!(tags, V_TL_EL, c_codon_seq, C_vect)
 
-    # N= C_vect' * (1 ./c_codon_seq)'
-
-    # fill!(tags.M, 0.0)
-
-    # tags.M .= tags.alpha_struc .* N 
-
-    # K_T3 = tags.M*V_TL_EL
-
-    # M_tRNA = @view tags.M[:,2:end-1]
-    # V_TL_EL_subset = @view V_TL_EL[3:end]
-
-    # K_tRNA = M_tRNA * V_TL_EL_subset # unloaded tRNA released by T3 complex consumptions
-
-       
+     
     ## translation termination
     te = tags.len_sequence-1 # Number of last coding codon
     # ke = findfirst(x -> x == tags["Seq1"]["Codon"][te], tags["cod"])
@@ -151,25 +138,9 @@ function rhs_sequence!(du, u, p)
 
     # translation termination - calculation of du 
 
-    # @inbounds for i in 1:tags.num_species
-    #     du[i] += tags.alpha_struc[i, end] * V_TL_TE
-    # end
-
-    # println("du: ", length(du))
-    # println("N_one: ", length(N_one))
-    # println("V_TL_TE: ", length(V_TL_TE))
-    # println("tags.alpha_one[end]: ", tags.alpha_one[end])
-    # du[tags.alpha_one[end]] += N_one[tags.alpha_one[end]] * V_TL_TE
-
-
     du[tags.alpha_one[end]] += V_TL_TE
 
-    # if tags.alpha_two[end] != 0
-    #     du[tags.alpha_two[end]] += N_two[tags.alpha_two[end]] * V_TL_TE
-    # end
-
     tags.rate_RIB[tags.len_sequence-1] -= V_TL_TE
-
 
     du[tags.idx.PTC] += V_TL_TE - k_rec_min * PTC;	            # PTC
     du[tags.idx.S30] += k_rec_min * PTC;                         # rate of 30S release due to recycling
@@ -181,8 +152,6 @@ function rhs_sequence!(du, u, p)
 
 
     # translation elongation - calculation of du 
-
-
 
     # concentration of the ribosome at the specific codon
     tags.rate_RIB[1] = - V_TL_EL[2];  
@@ -202,8 +171,6 @@ function rhs_sequence!(du, u, p)
     du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
 
     du[tags.idx.rna] += - V_TL_EL[12];
-
-
 
     # save RIB in du
     du[tags.idx_first_codon:end] .+= tags.rate_RIB;
