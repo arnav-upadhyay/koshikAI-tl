@@ -1659,15 +1659,16 @@ Calculates the translation rate at timepoint 100
 """
 
 function protein_production(sol, p)
+	tags = p.local_tags_list[1]
 	# Zustand zum Zeitpunkt t
 	t_query = 100.0
 	u_t = sol(t_query)
 
 	# Raten zum Zeitpunkt t berechnen
 	du_t = similar(u_t)  # Speicher für Ableitungen
-	ODE!(du_t, u_t, p, t_query)
+	ODE!(du_t, u_t, tags, t_query)
 
-	return du_t[p.local_tags_list[1].idx.PRT]
+	return du_t[tags.idx.PRT]
 end
 
 function save_results(sol, local_tags_list, save_data)
