@@ -1638,7 +1638,7 @@ end
 Calculates translation rate.
 """
 
-function calculate_translation_rate(df)
+function translation_rate_m(df)
     x1 = df.time[end]
     x2 = df.time[end-1]
     y1 = df.PRT[end]
@@ -1658,7 +1658,7 @@ end
 Calculates the translation rate at timepoint 100
 """
 
-function protein_production(sol, p)
+function translation_rate_ODE(sol, p)
 	tags = p.local_tags_list[1]
 	# Zustand zum Zeitpunkt t
 	t_query = 100.0
@@ -1666,9 +1666,9 @@ function protein_production(sol, p)
 
 	# Raten zum Zeitpunkt t berechnen
 	du_t = similar(u_t)  # Speicher für Ableitungen
-	ODE!(du_t, u_t, tags, t_query)
+	ODE_parallel_distributed!(du_t, u_t, p, t_query)
 
-	return du_t[tags.idx.PRT]
+	return Float64(du_t[tags.idx.PRT])
 end
 
 function save_results(sol, local_tags_list, save_data)
@@ -1682,6 +1682,18 @@ function save_results(sol, local_tags_list, save_data)
 
 		println("Solution saved at $filename.")
 	end
+end
+
+function save_translation_rates(translation_rates)
+	
+	# Save results 
+	timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
+	filename = "../data/output/translation_rates_" * timestamp * ".jld2"
+
+	@save filename translation_rates
+
+	println("Solution saved at $filename.")
+
 end
 
 # --------------------------- mRNA competition -----------------------------------------
@@ -1746,7 +1758,7 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	include("parameters.jl")
 	
 	hybrid_file		    = "lacS.txt"
-	seqs_to_use 	    = (1,2323)                                 # Range of sequences in Fasta file. Takes all sequences from sequence a to sequence b
+	seqs_to_use 	    = (1,2401)                                 # Range of sequences in Fasta file. Takes all sequences from sequence a to sequence b
 
 	# initialization of data containers
 	scale = txtl_types.init_scale()         # struct that makes it possible to influence rates by scaling them
@@ -1766,7 +1778,7 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	mRNA.mRNA 	= Float64.(mRNA.mRNA);
 
 	background_genes = String.(first(mRNA.gene, num_background_genes))
-	genes = vcat(background_genes, heterologous_genes)
+	genes = vcat(heterologous_genes, background_genes)
 	println("Number of sequences: $(length(genes))") 
 
 	mRNA = subset(mRNA, :gene => ByRow(in(genes)))
@@ -1829,14 +1841,16 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	prob 	= ODEProblem(f, y0_all, tspan, p); ## Create an ODE problem
 
 	# --- Timing the integration step ---
-	println("\n⏳ Integrating ODE system (distributed, test set)...")
+	# println("\n⏳ Integrating ODE system (distributed, test set)...")
 
 	sol     = solve(prob, FBDF(autodiff=false), reltol = 1e-8, abstol = 1e-6); ## Solve ODE system
 
 	println("Integration completed!")
 
+	translation_rate = translation_rate_ODE(sol, p)
 
-	return sol, p
+
+	return translation_rate
 end
 
 
