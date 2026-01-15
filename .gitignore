@@ -36,6 +36,7 @@ optimization_workflow.ipynb
 *.gif
 *.pdf
 *.fasta
+*.docx
 
 # --- Ignore logs and temporary files ---
 *.log
