@@ -46,12 +46,19 @@ function species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seq
 	# Starting conentrations 
 
 	data_path = joinpath(@__DIR__, "..", "data", "input")
-	metab 		= DataFrame(CSV.File(data_path * "\\metabolites.dat", delim=';', missingstring="")) # contains model species with 3 letter tags
-	amino 		= DataFrame(CSV.File(data_path * "\\aminoacids.dat", delim=';', missingstring="")) # AS long name, 3 letters, short form for aatRNAs and tRNAs
-	codon_conc 	= DataFrame(CSV.File(data_path * "\\Codons.dat", delim=';', missingstring="")) # Contains codons and the relative binding strength of the cognate tRNA to them
-	as_cod 		= DataFrame(CSV.File(data_path * "\\AS_and_Codon.dat", delim=';', missingstring="")) # tRNAs and codons they recognize
-	T3_comp 	= DataFrame(CSV.File(data_path * "\\T3_comp.dat", delim=';', missingstring="")) # codons and their compatible tRNAs (can be one or two tRNAs)
-	const_vars  = DataFrame(CSV.File(data_path * "\\Constant_variables.dat", delim=';', missingstring="")) # Tags of constant variables  
+	metab_path = joinpath(data_path, "Metabolites.dat")
+	amino_path = joinpath(data_path, "aminoacids.dat")
+	codons_path = joinpath(data_path, "Codons.dat")
+	AC_Cod_path = joinpath(data_path, "AS_and_Codon.dat")
+	T3_path = joinpath(data_path, "T3_comp.dat")
+	Const_path = joinpath(data_path, "Constant_variables.dat")
+
+	metab 		= DataFrame(CSV.File(metab_path, delim=';', missingstring="")) # contains model species with 3 letter tags
+	amino 		= DataFrame(CSV.File(amino_path, delim=';', missingstring="")) # AS long name, 3 letters, short form for aatRNAs and tRNAs
+	codon_conc 	= DataFrame(CSV.File(codons_path, delim=';', missingstring="")) # Contains codons and the relative binding strength of the cognate tRNA to them
+	as_cod 		= DataFrame(CSV.File(AC_Cod_path, delim=';', missingstring="")) # tRNAs and codons they recognize
+	T3_comp 	= DataFrame(CSV.File(T3_path, delim=';', missingstring="")) # codons and their compatible tRNAs (can be one or two tRNAs)
+	const_vars  = DataFrame(CSV.File(Const_path, delim=';', missingstring="")) # Tags of constant variables  
 			
 
 	# Tag structure
@@ -103,7 +110,8 @@ Function to read in sequences from a fasta file. Throws error if the sequence is
 function seqs_import_transcripts(sequence_file::String, seqs_to_use)
 	
 	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
-	filename = sequence_path * "\\" * sequence_file
+	# filename = sequence_path * "\\" * sequence_file
+	filename = joinpath(sequence_path, sequence_file)
 
     records = readfasta(filename)
     n = length(records)
@@ -364,7 +372,8 @@ function efac_import(species_and_seqs)
 
 	## Import
 	data_path = joinpath(@__DIR__, "..", "data", "input")
-	file = data_path * "\\Vieira_data_eco_revised.xlsx";
+	file = joinpath(data_path, "Vieira_data_eco_revised.xlsx")
+	# file = data_path * "\\Vieira_data_eco_revised.xlsx";
 
 	arrange = readmatrix(file,"switch","A2:A63");
 	arrange = convert(Matrix{Int64}, arrange);
@@ -554,12 +563,12 @@ function calculation_of_initial_concentration(species_and_seqs, seqs, seq_names,
 	GR = species_and_seqs.µ
 
 	# aminoacyl-tRNA synthetases
-	CoeffvalsARS = readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "aaRS", "B2:D21")
+	CoeffvalsARS = readmatrix(data_path*"/FitCoefficients_eco_V9.xlsx", "aaRS", "B2:D21")
 	ARSconcCalc  = CoeffvalsARS[:,3] .+(CoeffvalsARS[:,1].*GR)./(CoeffvalsARS[:,2].+GR)
 	c_ARS 		 = ARSconcCalc;
 
 	# Translation machinery
-	CoeffvalsMet 		= readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "Translation_machinery", "B2:D14")
+	CoeffvalsMet 		= readmatrix(data_path*"/FitCoefficients_eco_V9.xlsx", "Translation_machinery", "B2:D14")
 	METconcCalc = CoeffvalsMet[:,3]+(CoeffvalsMet[:,1].*GR)./(CoeffvalsMet[:,2].+GR);
 	sum_IF      = sum(METconcCalc[3:5])
 	total       = 1+0.4103+0.4219
@@ -579,7 +588,7 @@ function calculation_of_initial_concentration(species_and_seqs, seqs, seq_names,
 	constant_vars[16]    = METconcCalc[13];
 
 	# tRNAs
-	CoeffvalsReltRNA 	= readmatrix(data_path*"\\FitCoefficients_eco_V9.xlsx", "reltRNA", "B2:D40")
+	CoeffvalsReltRNA 	= readmatrix(data_path*"/FitCoefficients_eco_V9.xlsx", "reltRNA", "B2:D40")
 	tRNAconcCalc = (CoeffvalsReltRNA[:,1].*exp.(-CoeffvalsReltRNA[:,2].*GR).+CoeffvalsReltRNA[:,3]).*S50 
 	y0[idx.b1t:idx.ty1] = tRNAconcCalc[1:39];
 
@@ -1353,7 +1362,10 @@ function ODE_parallel_distributed!(du, u, p, t)
     @views u_metab =  u[1:n_metab]				                            # Save all pool species from u in a vector 
 
     # thread-local accumulator for du[1:start]
-    du_head_threads = [zero(u_metab) for _ in 1:Threads.nthreads()]
+    #du_head_threads = [zero(u_metab) for _ in 1:Threads.nthreads()] ---- wrong for servers! - Arnav
+	# Jupyter/REPL often runs on an extra "interactive" thread whose id is
+    # Threads.nthreads() + 1; allocate one extra slot to avoid BoundsError.
+    du_head_threads = [zero(u_metab) for _ in 1:(Threads.nthreads() + 1)]
 
     Threads.@threads for i in 1:n_seq				                        # Threading instead of map, # ONLY CHANGE: map -> Threads.@threads for  
         tid = Threads.threadid()
@@ -1775,7 +1787,7 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 
 	# Data import --------
 	mRNA 		= to_DataFrame(readmatrix("../data/input/mRNA_concentrations.xlsx", "mRNA_concentration", "A1:B2402"))
-	mRNA.mRNA 	= Float64.(mRNA.mRNA);
+	mRNA.mRNA 	= Float64.(mRNA.mRNA)
 
 	background_genes = String.(first(mRNA.gene, num_background_genes))
 	genes = vcat(heterologous_genes, background_genes)
