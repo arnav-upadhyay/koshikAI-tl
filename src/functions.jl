@@ -1354,6 +1354,11 @@ Aim: Enable parallel computing of du for multiple sequences.
 
 function ODE_parallel_distributed!(du, u, p, t)
 
+	    # Defensive check: if p is a Vector (local_tags_list), convert it to parameters struct
+    if p isa Vector && eltype(p) <: txtl_types.data_struct_integration
+        p = generate_p(p)
+    end
+
 
     # Vectors and numbers 
     @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab = p.vectors
