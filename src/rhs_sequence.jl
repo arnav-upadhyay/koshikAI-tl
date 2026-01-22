@@ -27,32 +27,56 @@ function rhs_sequence!(du, u, p)
 
 
     # Define RIB1
-    
+
     fill!(tags.rate_RIB, 0.0)
 
     @views c_RIB	= u[tags.idx_first_codon:end]     
 
-    @views total_RNA   = tags.RNA + sum(c_RIB[1:12])
+    # Positivity guard: the implicit solver can produce tiny negative ribosome occupancies.
+    # Using negative occupancies directly in flux formulas can amplify the error and create runaway negatives.
+    # We compute fluxes using non-negative ribosome occupancies.
+    total_RNA = tags.RNA
+    @inbounds for k in 1:12
+        total_RNA += max(c_RIB[k], 0.0)
+    end
 
     fill!(tags.q_R_elo, 1.0)
         
     @views for i in 2:(tags.len_sequence - 13)
 
-        if total_RNA-sum(c_RIB[i:i+12]) == 0
+        # sum of the window, treating negative occupancies as 0
+        window_sum = 0.0
+        @inbounds for k in i:(i+12)
+            window_sum += max(c_RIB[k], 0.0)
+        end
+
+        if total_RNA - window_sum == 0
 
             tags.q_R_elo[i] 	= 0;
         else
-            tags.q_R_elo[i] 	= 1 - c_RIB[i+12] / (total_RNA-sum(c_RIB[i:i+11]));
+            denom = total_RNA
+            @inbounds for k in i:(i+11)
+                denom -= max(c_RIB[k], 0.0)
+            end
+            tags.q_R_elo[i] = 1 - max(c_RIB[i+12], 0.0) / denom
         
         end
     end 
 
 
     @views for i in (tags.len_sequence-13) : (tags.len_sequence-1)
-        if total_RNA - sum(c_RIB[i : end]) == 0
+        tail_sum = 0.0
+        @inbounds for k in i:length(c_RIB)
+            tail_sum += max(c_RIB[k], 0.0)
+        end
+        if total_RNA - tail_sum == 0
             tags.q_R_elo[i] = 0
         else 
-            tags.q_R_elo[i] = 1 - (c_RIB[end] + PTC) / (total_RNA - sum(c_RIB[i:end-1]))
+            denom = total_RNA
+            @inbounds for k in i:(length(c_RIB)-1)
+                denom -= max(c_RIB[k], 0.0)
+            end
+            tags.q_R_elo[i] = 1 - (max(c_RIB[end], 0.0) + max(PTC, 0.0)) / denom
         end
     end
 
@@ -70,7 +94,8 @@ function rhs_sequence!(du, u, p)
 
     V_TL_EL	= zeros(tags.len_sequence-1);
 
-    EGT_inv = inv(EGT)
+    EGT_pos = max(EGT, 0.0)
+    EGT_inv = (EGT_pos > 0.0) ? inv(EGT_pos) : inv(eps(Float64))
 
 
     @inbounds for i in 1:tags.len_sequence-2
@@ -91,7 +116,7 @@ function rhs_sequence!(du, u, p)
             denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
 
             V_TL_EL[i+1] =
-                tags.q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
+                tags.q_R_elo[i] * k_TLEmaxj * max(c_RIB[i], 0.0) * eff / denom
         end
     end
 
@@ -119,12 +144,13 @@ function rhs_sequence!(du, u, p)
 
 
     V_TE_max = k_ter * RFt   # RFt is RF1/2 total
-    V_TL_TE = V_TE_max * efficiency_term / (1 + KM_RK/ c_RIB[te] + KM_RF3GTP/RGT + KM_RK * KM_RF3GTP /(c_RIB[te] * RGT))
-        
-    if c_RIB[te] == 0 || GTP == 0
-        V_TL_TE=0;
+    c_te = max(c_RIB[te], 0.0)
+    if c_te == 0.0 || GTP == 0
+        V_TL_TE = 0.0
+    else
+        V_TL_TE = V_TE_max * efficiency_term / (1 + KM_RK / c_te + KM_RF3GTP / RGT + KM_RK * KM_RF3GTP / (c_te * RGT))
     end
-
+        
     V_RF3_GDP_ass  = k_RF3_GDP_ass  * RF3 * GDP;
     V_RF3_GTP_ass  = k_RF3_GTP_ass  * RF3 * GTP;
     V_RF3_GDP_diss = k_RF3_GDP_diss * RGD;
@@ -174,6 +200,14 @@ function rhs_sequence!(du, u, p)
 
     # save RIB in du
     du[tags.idx_first_codon:end] .+= tags.rate_RIB;
+
+    # Final positivity guard for ribosome-position states:
+    # if a ribosome position is at/below zero, do not allow its derivative to drive it further negative.
+    @inbounds for j in tags.idx_first_codon:length(u)
+        if u[j] <= 0.0 && du[j] < 0.0
+            du[j] = 0.0
+        end
+    end
 
     return du
 end
