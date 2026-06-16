@@ -11,9 +11,11 @@ using UnPack
 
 ## Solvers
 using DifferentialEquations
+using SciMLBase: successful_retcode
 using Statistics
 using DelimitedFiles
 using LinearAlgebra
+using Printf
 
 ## Analysis
 using Plots
@@ -32,6 +34,7 @@ println("🔧 Julia started with $(Threads.nthreads()) threads")
 # Files 
 include("datatypes.jl")
 include("functions.jl")
+include("ode_diagnostics.jl")
 include("rhs_metabolites.jl")
 include("rhs_sequence.jl")
 include("parameters.jl")

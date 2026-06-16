@@ -5,7 +5,7 @@ module txtl_types
 
 using BioSequences
 
-export SequenceData, scale_struct, data_struct, init_scale, init_data, init_indices
+export SequenceData, scale_struct, data_struct, init_scale, make_scale, init_data, init_indices
 
 struct SequenceData
     DNA::LongDNA{2}
@@ -30,6 +30,29 @@ end
 
 function init_scale()
     return scale(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 .* ones(20), 0.0, 0.0)
+end
+
+"""
+    make_scale(; kwargs...)
+
+Build a scale struct with keyword arguments. Unspecified fields use init_scale() defaults.
+Usage: make_scale(EF_scale=0.1, Rib_scale=0.5)
+"""
+function make_scale(;
+        V_TC_scale       = 1.0,
+        k_TLEmaxj_scale  = 1.0,
+        V_IN_70SIC_scale = 75.0,
+        V_IN_IF2D_scale  = 2.0,
+        Rib_scale        = 1.0,
+        IF_scale         = 1.0,
+        EF_scale         = 1.0,
+        tRNA_scale       = 1.0,   # 
+        ARS_scale        = 20.0 .* ones(20),
+        RibRecycling     = 0.0,
+        V_mDeg_scale     = 0.0)
+    return scale(V_TC_scale, k_TLEmaxj_scale, V_IN_70SIC_scale,
+                 V_IN_IF2D_scale, Rib_scale, IF_scale, EF_scale,
+                 tRNA_scale, ARS_scale, RibRecycling, V_mDeg_scale)
 end
 
 
@@ -200,10 +223,13 @@ end
 
 # ------------------------------ efficiency_factor_initialization ------------------------------------------------------
 
-struct flags 
+struct flags
 	positive_aminoacid::Bool
 	anti_shinedalgarno::Bool
-	dynamic_efficiency::Bool 
+	dynamic_efficiency::Bool
+	spindler_tx::Bool
+	static_EFs::Bool
+	spindler_75pct::Bool
 end
 
 struct dynamic_efficiency_factors
@@ -441,6 +467,10 @@ struct vectors
     results::Vector{Vector{Float64}}
 	du_seq::Vector{Vector{Float64}}
 	du_metab::Vector{Float64}
+	total_rna_ref::Ref{Float64}
+	u_seq_zero::Vector{Float64}      # buffer for shared-cascade ODE call (zeroed per-gene vars)
+	du_zero::Vector{Float64}         # du buffer for shared-cascade ODE call
+	shared_cascade::Vector{Float64}  # extracted shared-cascade metabolite rates (length n_metab)
 end
 
 struct data_struct_integration 
@@ -470,6 +500,8 @@ struct data_struct_integration
 	seq_names::Vector{String}
 	idx_first_codon::Int32
 	RNA::Float64
+	delta::Float64  # mRNA degradation rate [min⁻¹]
+	total_rna_ref::Ref{Float64}  # shared across sequences for Spindler TX competition
 
 	num_species::Int64
 	len_sequence::Int64

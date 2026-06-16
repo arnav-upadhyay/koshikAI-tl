@@ -56,6 +56,8 @@ function parameters(initial_concentrations, species_and_seqs, scale, µ)
     KM_EFTuGTP	= 1;	# µM
     Ki_EFTuGDP	= 5.6;	# µM
     Ki_EFTuGTP	= 1;	# µM 
+    # c_tot_EFG is y0[EFG] after one EF_scale in calculation_of_initial_concentration — this multiplies again.
+    # If both are intended, total EF-G in the DAE scales as (METconcCalc[6] * EF_scale^2). Confirm vs FitCoefficients_eco_V9.xlsx Translation_machinery.
     c_EFG_t		= initial_concentrations.c_tot_EFG*scale.EF_scale # µM
 
     EF = txtl_types.EF_recycling(k_EFGGDP_Diss, k_EFG_GDP_Ass, k_EFG_GTP_Ass, k_EFGGTP_Diss, k_EFTsf, k_EFTsr, Keq_EFTu, KM_GTP, KM_GDP, KM_EFTuGDP, KM_EFTuGTP, Ki_EFTuGDP, Ki_EFTuGTP, c_EFG_t)

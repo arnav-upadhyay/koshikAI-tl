@@ -32,13 +32,16 @@ function species_and_sequences(genes, µ, sequence_file, hybrid_file, flags, seq
 	# end
 
 	# ------------ for competition mode
-	seq_names = genes		
-	# filter seqs_all
-	seqs = Dict(k => seqs_all[k] for k in seq_names if haskey(seqs_all, k));
+	seqs = Dict(k => seqs_all[k] for k in genes if haskey(seqs_all, k))
+	seq_names = [g for g in genes if haskey(seqs_all, g)]
 	no_of_seqs = length(seq_names)
+	if no_of_seqs < length(genes)
+		@warn "species_and_sequences: $(length(genes) - no_of_seqs) gene(s) not in FASTA — skipped" skipped = setdiff(genes, seq_names)
+	end
+	isempty(seq_names) && error("species_and_sequences: none of the requested genes appear in the FASTA file")
 
 	if µ < 0.56
-		avail_rib = -1.1191*tags.growth_rate^2 + 2.0385*tags.growth_rate + 0.1996; # calculate percentage of available ribosome, from Matamouros et al. 2021
+		avail_rib = -1.1191*µ^2 + 2.0385*µ + 0.1996; # calculate percentage of available ribosome, from Matamouros et al. 2021
 	else
 		avail_rib = 1.0 
 	end
@@ -151,8 +154,8 @@ function seqs_import_transcripts(sequence_file::String, seqs_to_use)
 		end
     end
     
-    # Filter out any nil entries from problematic sequences
-    valid_seqs = filter(x -> x !== nothing, Seqs)
+    # Filter out uninitialized entries from problematic/skipped sequences
+    valid_seqs = [Seqs[i] for i in eachindex(Seqs) if isassigned(Seqs, i)]
     
     if isempty(valid_seqs)
         error("❌ No valid sequences found! All sequences had errors.")
@@ -171,6 +174,164 @@ function seqs_import_transcripts(sequence_file::String, seqs_to_use)
     
     # println("✅ Successfully loaded $(length(sequence_names)) sequences")
     return SeqsDict, sequence_names
+end
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Codon-balanced background-gene selection
+# ───────────────────────────────────────────────────────────────────────────────
+# The standard 20 amino acids in one-letter code, in a fixed order so all
+# downstream vectors are comparable. BioSequences.translate emits the same
+# upper-case letters; the stop codon '*' is excluded.
+const AA20_LETTERS = collect("ACDEFGHIKLMNPQRSTVWY")  # length-20 Char vector
+
+"""
+	aa_count_vec(aa_seq) -> Vector{Float64}(20)
+
+Count occurrences of each of the 20 standard amino acids in `aa_seq`
+(any iterable of `Char`-convertible elements, e.g. a `LongAA` from
+`txtl_types.SequenceData.AA1`). Stop codons and non-standard letters are
+dropped silently. Order matches `AA20_LETTERS`.
+"""
+function aa_count_vec(aa_seq)::Vector{Float64}
+	counts = zeros(Float64, 20)
+	for ch in aa_seq
+		c = Char(ch)
+		for k in 1:20
+			if c == AA20_LETTERS[k]
+				counts[k] += 1.0
+				break
+			end
+		end
+	end
+	return counts
+end
+
+"""
+	proteome_aa_target(seqs_dict) -> Vector{Float64}(20)
+
+Aggregate amino-acid usage across every gene in `seqs_dict` (a
+`Dict{String, txtl_types.SequenceData}` as produced by
+`seqs_import_transcripts`) and return the proteome-average fraction
+per amino acid (sums to 1, order = `AA20_LETTERS`).
+"""
+function proteome_aa_target(seqs_dict::AbstractDict)::Vector{Float64}
+	total = zeros(Float64, 20)
+	for (_, sd) in seqs_dict
+		total .+= aa_count_vec(sd.AA1)
+	end
+	s = sum(total)
+	s > 0 || error("proteome_aa_target: no standard amino acids found in seqs_dict")
+	return total ./ s
+end
+
+"""
+	codon_balanced_background_selection(seqs_all_fasta, candidate_pool,
+	                                    primary_gene, N_target;
+	                                    seed_with_primary=true, verbose=true)
+
+Greedy selection of `N_target` background genes from `candidate_pool` (a
+`Vector{String}` of gene names eligible to be background — already filtered to
+those present in both the FASTA and the mRNA xlsx and excluding `primary_gene`)
+that minimises the **L1 distance** between the aggregate amino-acid usage
+(primary + chosen background, if `seed_with_primary=true`) and the proteome
+average computed from `seqs_all_fasta`.
+
+At each step we add the candidate gene that produces the largest reduction in
+L1 deviation from `proteome_aa_target(seqs_all_fasta)`. This is the standard
+greedy approximation to the subset-selection problem — exact min-deviation
+selection is combinatorial, but greedy is provably within a small constant
+factor for this kind of additive-aggregation objective, and is fast enough
+(O(N · |candidates| · 20)).
+
+Returns a NamedTuple with:
+- `selected::Vector{String}`               chosen background genes in the order added
+- `final_aa_counts::Vector{Float64}(20)`   aggregate aa counts (primary if seeded + selected)
+- `final_fractions::Vector{Float64}(20)`   normalised final aa fractions
+- `target::Vector{Float64}(20)`            proteome-average target fractions
+- `dev_l1_per_step::Vector{Float64}`       L1 deviation after each addition (length `length(selected)`)
+- `final_dev_l1::Float64`                  final L1 deviation
+- `final_dev_pct_max::Float64`             max |frac_i − target_i| / target_i × 100
+  (the X% tolerance the user can compare against)
+"""
+function codon_balanced_background_selection(
+		seqs_all_fasta::AbstractDict,
+		candidate_pool::AbstractVector{<:AbstractString},
+		primary_gene::AbstractString,
+		N_target::Integer;
+		seed_with_primary::Bool = true,
+		verbose::Bool = true)
+
+	target = proteome_aa_target(seqs_all_fasta)
+
+	# Pre-compute aa-count vectors for every candidate (and for primary) so the
+	# inner loop is pure arithmetic.
+	cand_counts = Dict{String, Vector{Float64}}()
+	for g in candidate_pool
+		haskey(seqs_all_fasta, g) || continue
+		cand_counts[g] = aa_count_vec(seqs_all_fasta[g].AA1)
+	end
+	usable = collect(keys(cand_counts))
+	length(usable) >= N_target ||
+		@warn "codon_balanced_background_selection: candidate pool smaller than N_target" pool=length(usable) requested=N_target
+
+	accumulator = zeros(Float64, 20)
+	if seed_with_primary
+		haskey(seqs_all_fasta, primary_gene) ||
+			error("codon_balanced_background_selection: primary_gene \"$primary_gene\" not in seqs_all_fasta")
+		accumulator .= aa_count_vec(seqs_all_fasta[primary_gene].AA1)
+	end
+
+	selected = String[]
+	chosen_set = Set{String}()
+	dev_history = Float64[]
+
+	N_eff = min(N_target, length(usable))
+	for step in 1:N_eff
+		best_g = ""
+		best_dev = Inf
+		# Inner loop: try every still-eligible candidate.
+		for g in usable
+			g in chosen_set && continue
+			c = cand_counts[g]
+			trial = accumulator .+ c
+			s = sum(trial)
+			s > 0 || continue
+			frac = trial ./ s
+			dev = sum(abs.(frac .- target))
+			if dev < best_dev
+				best_dev = dev
+				best_g = g
+			end
+		end
+		isempty(best_g) && break
+		push!(selected, best_g)
+		push!(chosen_set, best_g)
+		accumulator .+= cand_counts[best_g]
+		push!(dev_history, best_dev)
+		if verbose
+			@printf("  step %2d  +%-12s  L1-dev=%.4f\n", step, best_g, best_dev)
+		end
+	end
+
+	s_final = sum(accumulator)
+	final_frac = s_final > 0 ? accumulator ./ s_final : fill(NaN, 20)
+	final_dev = sum(abs.(final_frac .- target))
+	# Max relative deviation (skip aa with target = 0 to avoid div by zero).
+	pct_max = 0.0
+	for k in 1:20
+		if target[k] > 0
+			r = abs(final_frac[k] - target[k]) / target[k] * 100.0
+			r > pct_max && (pct_max = r)
+		end
+	end
+
+	return (selected = selected,
+			final_aa_counts = accumulator,
+			final_fractions = final_frac,
+			target = target,
+			dev_l1_per_step = dev_history,
+			final_dev_l1 = final_dev,
+			final_dev_pct_max = pct_max)
 end
 
 """
@@ -607,6 +768,23 @@ function calculation_of_initial_concentration(species_and_seqs, seqs, seq_names,
 	y0[idx.EFG]    = y0[idx.EFG]   .*scale.EF_scale; #EFG
 	constant_vars[13:14] = constant_vars[13:14].*scale.EF_scale; #EFTu_total & EFTs_total
 
+	y0[idx.S30] = y0[idx.S30] * scale.Rib_scale
+	y0[idx.S50] = y0[idx.S50] * scale.Rib_scale
+
+	y0[idx.IF1] = y0[idx.IF1] * scale.IF_scale
+	y0[idx.IF2] = y0[idx.IF2] * scale.IF_scale
+	y0[idx.IF3] = y0[idx.IF3] * scale.IF_scale
+
+	y0[idx.b1t:idx.ty1] = y0[idx.b1t:idx.ty1] .* scale.tRNA_scale
+
+	# NOTE: The C2 warm-start (scale_tuning_log.md §5.1) is applied AFTER
+	# preintegration in `preintegration` (this file, ~L1082), not here.
+	# Reason: this y0 is the single-gene PROTOTYPE; the per-gene fan-out
+	# happens in `combined_states_vector` (~L1541) using the prototype's
+	# post-preintegration [S70, rna, PRT, PTC] template. Seeding before
+	# preintegration can be decayed back to zero by the DAE solver, so
+	# the seed must live downstream of it.
+
 	# Plasmid 
 	C_D			= 0.001;				 # nM --> 4.246e-3 µM/0.004246  /2.5e-3/one Gene --> 0.0010 µM
 	constant_vars[37] = C_D
@@ -723,7 +901,45 @@ function rhs_metabolites_preintegration!(du, u, p)
 	# Unpack dynamic variables 
 	S30, S50, IF1, IF2, IF3, SC1, SC2, SC3, SC4, PIC, EFG, EFD, EGT, EGD, EFT, RF3, RGT, RGD, b1t, ta1, ta2, tc1, td1, te2, tf1, tg2, tg3, th1, ti1, tk1, t1l, t2l, t3l, t4l, t5l, tm1, tn1, tp1, tp2, tp3, tq1, tq2, tr2, tr3, tr4, tr5, ts1, ts2, ts3, ts5, tt1, tt2, tt4, tv1, tv2, tw1, ty1, tA1, tA2, tC1, tD1, tE2, tF1, tG2, tG3, tH1, tI1, tK1, tL1, tL2, tL3, tL4, tL5, tM1, tN1, tP1, tP2, tP3, tQ1, tQ2, tR2, tR3, tR4, tR5, tS1, tS2, tS3, tS5, tT1, tT2, tT4, tV1, tV2, tW1, tY1, a1t, a2t, c1t, d1t, e2t, f1t, g2t, g3t, h1t, i1t, k1t, l1t, l2t, l3t, l4t, l5t, m1t, n1t, p1t, p2t, p3t, q1t, q2t, r2t, r3t, r4t, r5t, s1t, s2t, s3t, s5t, t1t, t2t, t4t, v1t, v2t, w1t, y1t, RNA, S70, rna, PRT, PTC, RIB1 = u 
 
-	RNA = tags.RNA 
+	RNA = max(rna, 0.0)  # Dynamic mRNA from state vector (was tags.RNA)
+	# Same nonneg guards as rhs_metabolites.jl (preintegration is less critical but stay consistent)
+	_eps = 1e-12
+	ta1 = max(ta1, _eps); ta2 = max(ta2, _eps); tc1 = max(tc1, _eps); td1 = max(td1, _eps)
+	te2 = max(te2, _eps); tf1 = max(tf1, _eps); tg2 = max(tg2, _eps); tg3 = max(tg3, _eps)
+	th1 = max(th1, _eps); ti1 = max(ti1, _eps); tk1 = max(tk1, _eps)
+	t1l = max(t1l, _eps); t2l = max(t2l, _eps); t3l = max(t3l, _eps); t4l = max(t4l, _eps); t5l = max(t5l, _eps)
+	tm1 = max(tm1, _eps); tn1 = max(tn1, _eps)
+	tp1 = max(tp1, _eps); tp2 = max(tp2, _eps); tp3 = max(tp3, _eps)
+	tq1 = max(tq1, _eps); tq2 = max(tq2, _eps)
+	tr2 = max(tr2, _eps); tr3 = max(tr3, _eps); tr4 = max(tr4, _eps); tr5 = max(tr5, _eps)
+	ts1 = max(ts1, _eps); ts2 = max(ts2, _eps); ts3 = max(ts3, _eps); ts5 = max(ts5, _eps)
+	tt1 = max(tt1, _eps); tt2 = max(tt2, _eps); tt4 = max(tt4, _eps)
+	tv1 = max(tv1, _eps); tv2 = max(tv2, _eps); tw1 = max(tw1, _eps); ty1 = max(ty1, _eps)
+	EFT = max(EFT, 0.0); EGD = max(EGD, 0.0)
+	S30 = max(S30, 0.0); S50 = max(S50, 0.0); S70 = max(S70, 0.0); PIC = max(PIC, 0.0)
+	# aa-tRNAs and T3 complexes (same guards as rhs_metabolites.jl)
+	tA1 = max(tA1, 0.0); tA2 = max(tA2, 0.0); tC1 = max(tC1, 0.0); tD1 = max(tD1, 0.0)
+	tE2 = max(tE2, 0.0); tF1 = max(tF1, 0.0); tG2 = max(tG2, 0.0); tG3 = max(tG3, 0.0)
+	tH1 = max(tH1, 0.0); tI1 = max(tI1, 0.0); tK1 = max(tK1, 0.0)
+	tL1 = max(tL1, 0.0); tL2 = max(tL2, 0.0); tL3 = max(tL3, 0.0); tL4 = max(tL4, 0.0); tL5 = max(tL5, 0.0)
+	tM1 = max(tM1, 0.0); tN1 = max(tN1, 0.0)
+	tP1 = max(tP1, 0.0); tP2 = max(tP2, 0.0); tP3 = max(tP3, 0.0)
+	tQ1 = max(tQ1, 0.0); tQ2 = max(tQ2, 0.0)
+	tR2 = max(tR2, 0.0); tR3 = max(tR3, 0.0); tR4 = max(tR4, 0.0); tR5 = max(tR5, 0.0)
+	tS1 = max(tS1, 0.0); tS2 = max(tS2, 0.0); tS3 = max(tS3, 0.0); tS5 = max(tS5, 0.0)
+	tT1 = max(tT1, 0.0); tT2 = max(tT2, 0.0); tT4 = max(tT4, 0.0)
+	tV1 = max(tV1, 0.0); tV2 = max(tV2, 0.0); tW1 = max(tW1, 0.0); tY1 = max(tY1, 0.0)
+	a1t = max(a1t, 0.0); a2t = max(a2t, 0.0); c1t = max(c1t, 0.0); d1t = max(d1t, 0.0)
+	e2t = max(e2t, 0.0); f1t = max(f1t, 0.0); g2t = max(g2t, 0.0); g3t = max(g3t, 0.0)
+	h1t = max(h1t, 0.0); i1t = max(i1t, 0.0); k1t = max(k1t, 0.0)
+	l1t = max(l1t, 0.0); l2t = max(l2t, 0.0); l3t = max(l3t, 0.0); l4t = max(l4t, 0.0); l5t = max(l5t, 0.0)
+	m1t = max(m1t, 0.0); n1t = max(n1t, 0.0)
+	p1t = max(p1t, 0.0); p2t = max(p2t, 0.0); p3t = max(p3t, 0.0)
+	q1t = max(q1t, 0.0); q2t = max(q2t, 0.0)
+	r2t = max(r2t, 0.0); r3t = max(r3t, 0.0); r4t = max(r4t, 0.0); r5t = max(r5t, 0.0)
+	s1t = max(s1t, 0.0); s2t = max(s2t, 0.0); s3t = max(s3t, 0.0); s5t = max(s5t, 0.0)
+	t1t = max(t1t, 0.0); t2t = max(t2t, 0.0); t4t = max(t4t, 0.0)
+	v1t = max(v1t, 0.0); v2t = max(v2t, 0.0); w1t = max(w1t, 0.0); y1t = max(y1t, 0.0)
 
 	# Define RIB1
 	idx_first_codon = length(tags.species_and_sequences.Tag)+1
@@ -756,7 +972,7 @@ function rhs_metabolites_preintegration!(du, u, p)
 	du[tags.idx.SC2] = + k_on_30SIF3_IF1*SC1*IF1 - k_off_30SIF3IF1*SC2 + k_off_30SIF3IF1IF2*SC4    - k_on_30SIF3IF1_IF2*SC2*IF2 # 19
 	du[tags.idx.SC3] = + k_on_30SIF3_IF2*SC1*IF2 - k_off_30SIF3IF2*SC3 + k_off_30SIF3IF2IF1*SC4    - k_on_30SIF3IF2_IF1*SC3*IF1 # 20
 	du[tags.idx.SC4] = + k_off_30SIF123fMet*PIC       - k_on_30SIF123_fMet*SC4*b1t + k_on_30SIF3IF1_IF2*SC2*IF2 - k_off_30SIF3IF1IF2*SC4 + k_on_30SIF3IF2_IF1*SC3*IF1 - k_off_30SIF3IF2IF1*SC4 # 21
-	du[tags.idx.PIC] =  + k_on_30SIF123_fMet*SC4*b1t - k_off_30SIF123fMet*PIC - (((k_IN_70SIC * PIC)/ ( 1+(KM_mRNA/RNA+(KM_50S/S50)) )) .* q_RBS) # 22 30S PIC
+	du[tags.idx.PIC] =  + k_on_30SIF123_fMet*SC4*b1t - k_off_30SIF123fMet*PIC - V_IN_70SIC # 22 30S PIC
 	du[tags.idx.b1t] = + k_off_30SIF123fMet*PIC - k_on_30SIF123_fMet*SC4*b1t + V_IN_IF2D # 35, db1t
 	# du[tags.idx.RNA] = - V_IN_70SIC # 170, dRNA
 	du[tags.idx.S70] = V_IN_70SIC - V_IN_IF2D # 171, dS70
@@ -785,9 +1001,14 @@ function rhs_metabolites_preintegration!(du, u, p)
 
 	T3sum = sum(T3);
 
-	# DAE system
-	du[tags.idx.EFG] = EFG + EGT + EGD - c_EFG_t;   # EFG
-	du[tags.idx.EFD] = EFT + EFD - Eut + T3sum;     # EFTu_GDP
+	# DAE algebraic constraints — MUST use raw state values (not clamped locals)
+	raw_EFG = u[tags.idx.EFG]
+	raw_EGT = u[tags.idx.EGT]
+	raw_EGD = u[tags.idx.EGD]
+	raw_EFT = u[tags.idx.EFT]
+	raw_EFD = u[tags.idx.EFD]
+	du[tags.idx.EFG] = raw_EFG + raw_EGT + raw_EGD - c_EFG_t;   # EF-G conservation
+	du[tags.idx.EFD] = raw_EFT + raw_EFD - Eut + T3sum;          # EF-Tu conservation
 	
 	nothing
 end
@@ -845,8 +1066,21 @@ function preintegration(tags, y0, M)
 	# Negative S70 (free 70S ribosome pool) was causing multi-sequence simulations to fail
 	# When S70 goes negative in preintegration, it propagates to all sequences in y0_all
 	# This ensures the steady-state vector is physically valid before being used
-	y_steady_state[tags.idx.S70] = max(y_steady_state[tags.idx.S70], 0.0)
-	
+	#
+	# ── C2 warm-start (scale_tuning_log.md §5.1) ────────────────────────────────
+	# We lift the floor from 0.0 to S70_seed = 1e-4 µM.  Rationale: at high N
+	# (≳40), if preintegration converges to S70 ≤ 0, the clamp pinned it to
+	# exactly 0; the [S70, rna, PRT, PTC] template is then replicated for every
+	# gene in `combined_states_vector` (~L1541), giving N_total rows with u=0
+	# and finite du from initiation flux → |du|/|u| = ∞ in the t=0 Jacobian
+	# (constraint C2).  A sub-attomolar seed (1e-4 µM ≪ natural steady-state
+	# |S70| of ~10⁻³–10⁻² µM during translation) removes the singularity
+	# without biasing dynamics; the seed relaxes to the natural value within
+	# ~0.01 sim-min.  This `max` strictly subsumes the original `max(..., 0.0)`
+	# clamp since 1e-4 > 0.
+	S70_seed = 1e-4  # µM — see C2 warm-start note above
+	y_steady_state[tags.idx.S70] = max(y_steady_state[tags.idx.S70], S70_seed)
+
 	# Also clamp rna (transcribed RNA) to ensure non-negative
 	# RNA/rna are output species that should also be non-negative
 	y_steady_state[tags.idx.rna] = max(y_steady_state[tags.idx.rna], 0.0)
@@ -1022,7 +1256,13 @@ function generate_p(local_tags_list)
 
 	du_metab = zeros(n_metab)
 
-    vectors = txtl_types.vectors(y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab)
+	len_1 = y_codons_lengths[1]
+	u_seq_zero      = zeros(n_metab + len_1)
+	du_zero         = zeros(n_metab + len_1)
+	shared_cascade  = zeros(n_metab)
+
+    vectors = txtl_types.vectors(y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab, Ref(0.0),
+		u_seq_zero, du_zero, shared_cascade)
 
     p = txtl_types.parameters(local_tags_list, vectors)
 
@@ -1037,6 +1277,7 @@ end
 function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict, mRNA)
 
 	local_tags_list = Vector{txtl_types.data_struct_integration}()
+	shared_total_rna = Ref(0.0)
 
 	for (i, seq_name) in enumerate(seq_names)
 
@@ -1066,6 +1307,14 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 
 		mRNA_concentration = filter(row -> row.gene == seq_name, mRNA).mRNA[]
 
+		# Calculate mRNA degradation rate
+		# Default half-life: 3.0 min (typical E. coli mRNA)
+		# Reference: Calabrese et al. "How total mRNA influences cell growth" Nature Physics (2024)
+		# To use gene-specific half-lives, create a dictionary: gene_half_lives = Dict("gene1" => 2.5, "gene2" => 4.0)
+		# Then use: mRNA_half_life = get(gene_half_lives, seq_name, 3.0)
+		mRNA_half_life = 3.0  # minutes (default for all genes)
+		delta = degradation_rate(mRNA_half_life)
+
 		# numbers and arrays for rhs_sequence
 		num_species 	= length(tags.species_and_sequences.Name)
 		len_sequence 	= length(sequence) # Codon length with stop codon 
@@ -1084,6 +1333,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 			tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name,
 			Tags, alpha_one, alpha_two, matrix_N, tRNA_charg, t3_Codon_struc, 
 			efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration,
+			delta, shared_total_rna,
 			num_species, len_sequence, rate_RIB, q_R_elo, M, 
 			mtRNA, N_one, N_two, K_T3, K_tRNA)
 
@@ -1355,18 +1605,31 @@ Aim: Enable parallel computing of du for multiple sequences.
 function ODE_parallel_distributed!(du, u, p, t)
 
     # Vectors and numbers 
-    @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab = p.vectors
+    @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab, u_seq_zero, du_zero, shared_cascade = p.vectors
 
     # Generate parts of u that need to be assembled specific to the sequence   
     @views u_metab =  u[1:n_metab]				                            # Save all pool species from u in a vector 
 
-    # thread-local accumulator for du[1:start]
-    #du_head_threads = [zero(u_metab) for _ in 1:Threads.nthreads()] ---- wrong for servers! - Arnav
+    # ─── Shared-cascade correction (needed when n_seq > 1) ───
+    # Each sequence's ODE call produces du[1:n_metab] = shared_kinetics + per_gene_effects.
+    # The shared_kinetics (30S/IF/SC assembly, tRNA charging, EF cycles) are identical for
+    # every sequence because they depend only on shared metabolites.  Accumulating across
+    # n_seq sequences therefore counts them n_seq times.  We compute the shared kinetics
+    # once (with per-gene variables zeroed) and subtract (n_seq − 1) copies after accumulation.
+    if n_seq > 1
+        local_tags_1 = p.local_tags_list[1]
+        @views u_seq_zero[1:n_metab] .= u_metab
+        @views u_seq_zero[n_metab+1:end] .= 0.0
+        ODE!(du_zero, u_seq_zero, local_tags_1, t)
+        @views shared_cascade .= du_zero[1:n_metab]
+    end
+
+    # thread-local accumulator for du[1:n_metab]
 	# Jupyter/REPL often runs on an extra "interactive" thread whose id is
     # Threads.nthreads() + 1; allocate one extra slot to avoid BoundsError.
     du_head_threads = [zero(u_metab) for _ in 1:(Threads.nthreads() + 1)]
 
-    Threads.@threads for i in 1:n_seq				                        # Threading instead of map, # ONLY CHANGE: map -> Threads.@threads for  
+    Threads.@threads for i in 1:n_seq
         tid = Threads.threadid()
 
         local_tags = p.local_tags_list[i]		                            # Extraction of local tags
@@ -1397,6 +1660,14 @@ function ODE_parallel_distributed!(du, u, p, t)
         @views du[1:n_metab] .+= acc
     end
 
+    # Subtract over-counted shared cascade: accumulated has n_seq copies, need only 1
+    if n_seq > 1
+        factor = Float64(n_seq - 1)
+        @inbounds for j in 1:n_metab
+            du[j] -= factor * shared_cascade[j]
+        end
+    end
+
     return nothing 
 end
 
@@ -1417,17 +1688,20 @@ function matrix_free_KT3!(tags, V_TL_EL, c_codon_seq, C_vect)
 
     # N_three = zeros(tags.len_sequence-1)
 
+    _eps_cc = 1e-12
     counter = 0
     @inbounds for (index, c_codon) in zip(tags.alpha_one, c_codon_seq)
         counter += 1
-        tags.N_one[counter] = C_vect[index] / c_codon
+        cc_safe = max(c_codon, _eps_cc)
+        tags.N_one[counter] = clamp(C_vect[index] / cc_safe, 0.0, 1.0)
     end
 
     counter = 0
     @inbounds for (index, c_codon) in zip(tags.alpha_two, c_codon_seq)
         if index != 0.0
             counter += 1
-            tags.N_two[counter] = C_vect[index] / c_codon
+            cc_safe = max(c_codon, _eps_cc)
+            tags.N_two[counter] = clamp(C_vect[index] / cc_safe, 0.0, 1.0)
         elseif index ==0.0
             counter += 1
             tags.N_two[counter] = 0.0
@@ -1479,47 +1753,42 @@ function sequence_dataframes(sol, local_tags_list)
     
     df_list = []
     seq_names = local_tags_list[1].seq_names
-    n_metab = length(local_tags_list[1].Tags)
-	idx = n_metab - 5
+    n_tags = length(local_tags_list[1].Tags)
+    n_shared = n_tags - 4
+
+    output_var_names = local_tags_list[1].species_and_sequences.Tag[n_shared+1 : n_shared+4]
+
+    seq_offset = n_shared
     
 	for (seq_idx, seq_name) in enumerate(seq_names)
         local_tags = local_tags_list[seq_idx]
 
-		# Prepare data frame 
         df = DataFrame()
         df.time = sol.t
 
-		# Metabolites
-        for i in 1:n_metab 
-            var_name = i <= length(local_tags.species_and_sequences.Tag) ? local_tags.species_and_sequences.Tag[i] : "State_$i"
+		# Shared metabolite pool (identical for every sequence)
+        for i in 1:n_shared
+            var_name = local_tags.species_and_sequences.Tag[i]
             df[!, var_name] = [u[i] for u in sol.u]
         end
 
-		# Output variables 
+		# Per-sequence output variables: S70, rna, PRT, PTC
+        for (k, tag) in enumerate(output_var_names)
+            pos = seq_offset + k
+            df[!, tag] = [u[pos] for u in sol.u]
+        end
 
-		out_start 	= n_metab - 4
-		out_end		= n_metab 
-
-		L = 0
-
-		for i in out_start:out_end
-			var_name = i <= length(local_tags.species_and_sequences.Tag) ? local_tags.species_and_sequences.Tag[i] : "State_$i"
-            df[!, var_name] = [u[i + L] for u in sol.u]
-		end
-
-		# Ribosome complexes
-        L = length(local_tags.species_and_sequences.Seq)-1
-        ribo_start = out_end + 1
-        ribo_end = out_end + L
+		# Ribosome positions for this sequence
+        L = length(local_tags.species_and_sequences.Seq) - 1
+        ribo_start = seq_offset + 4 + 1
 
         for i in 1:L
-            df[!, "Ribosome_$(i)"] = [u[ribo_start-1+i] for u in sol.u]
+            df[!, "Ribosome_$(i)"] = [u[ribo_start - 1 + i] for u in sol.u]
         end
 
         push!(df_list, df)
 
-        idx += L + 5
-
+        seq_offset += 4 + L
     end
 
     return df_list
@@ -1562,8 +1831,7 @@ function calculate_V_TL_EL(tags, y)
 
     # calculation of q_R_elo 
     c_RIB = y[tags.idx_first_codon:end]
-    # rna_free = y[tags.idx.RNA]
-    rna_free = tags.RNA
+    rna_free = max(y[tags.idx.rna], 0.0)  # Dynamic mRNA from state vector (was tags.RNA)
     total_RNA = rna_free + sum(c_RIB[1:12])
     s70_ini = y[tags.idx.S70]
     PTC = y[tags.idx.PTC]
@@ -1644,6 +1912,242 @@ function V_TL_EL_smooth(tags, V_TL_EL, c_RIB)
 end
 
 """
+	spindler_codon_translation_time(sol, p, gene; t_sample, n_window)
+
+Spindler-style codon-by-codon translation time for `gene`.
+
+Returns a NamedTuple:
+- `tau`:          Vector{Float64}  per-codon dwell time τ_i = 1/v_i  [seconds]
+- `v_smooth`:     Vector{Float64}  smoothed elongation rate (codons/s) from V_TL_EL_smooth
+- `total_time_s`: Float64          Σ τ_i  — total translation time along the CDS  [seconds]
+- `mean_v`:       Float64          mean smoothed elongation rate  [codons/s]
+- `L`:            Int              number of codon steps (ORF length − 1)
+- `t_used`:       Float64          actual time point used for the snapshot
+
+`t_sample` is the ODE-time (same units as tspan, default 20 min) at which the
+elongation profile is evaluated. If `t_sample` lies outside `sol.t`, it is clamped.
+
+`n_window` is the half-width of the sliding-average window used by `V_TL_EL_smooth`
+(default 3, matching the existing implementation).
+
+Uses `calculate_V_TL_EL` + `V_TL_EL_smooth` already in functions.jl.
+"""
+function spindler_codon_translation_time(sol, p, gene::String;
+		t_sample::Float64 = 20.0, n_window::Int = 3)
+
+	t_e = clamp(t_sample, sol.t[1], sol.t[end])
+	u_full = sol(t_e)
+	return spindler_codon_translation_time_at_u(u_full, p, gene, t_e; n_window = n_window)
+end
+
+"""
+	spindler_codon_translation_time_at_u(u_full, p, gene, t_used; n_window=3)
+
+Same per-codon elongation analysis as `spindler_codon_translation_time` but operates
+on a raw `u_full` snapshot vector (state at the given `t_used`, no `sol` required).
+Used by `print_timeout_snapshot_diagnostic` so the bottleneck report can be
+computed from a `PeriodicCallback`-captured snapshot even when the integration
+itself timed out before producing a complete `sol` object.
+
+Returns the same NamedTuple as `spindler_codon_translation_time`.
+"""
+function spindler_codon_translation_time_at_u(u_full, p, gene::String, t_used::Float64;
+		n_window::Int = 3)
+
+	si = _find_seq_index(p, gene)
+	u_seq = extract_u_sequence(u_full, p, si)
+	tags_si = p.local_tags_list[si]
+
+	# Compute intrinsic per-codon elongation rate (no queuing), matching Spindler's
+	# τ_j = 1 / (k_max * ε_j * T3_j/(KM+T3_j) * EFG·GTP/(KM_EFG+EFG·GTP))
+	@unpack k_TLEmaxj, KM_T3j, KM_EFGGTP = tags_si.p_seq.EL
+	EGT = max(u_seq[tags_si.idx.EGT], 0.0)
+	EGT_inv = EGT > 0.0 ? inv(EGT) : inv(eps(Float64))
+
+	num_species = tags_si.num_species
+	u_metab_safe = max.(@view(u_seq[1:num_species]), 0.0)
+	C_vect = reshape(u_metab_safe, 1, num_species)
+	c_Codon = tags_si.t3_Codon_struc * C_vect'
+
+	if tags_si.flags.dynamic_efficiency
+		efac = dynEffficiencyCalculation(tags_si, EGT, u_seq)
+	else
+		efac = tags_si.species_and_sequences.efac
+	end
+
+	len_seq = tags_si.len_sequence
+	L = len_seq - 2
+	v_intrinsic = zeros(L)
+
+	for i in 1:L
+		cod_next = tags_si.species_and_sequences.Seq[i+1]
+		cod_curr = tags_si.species_and_sequences.Seq[i]
+		j = tags_si.species_and_sequences.cod_idx[cod_next]
+		k = tags_si.species_and_sequences.cod_idx[cod_curr]
+		cc = c_Codon[j]
+		if cc > 0.0
+			eff = efac[k] * min(tags_si.efac_pos_aa[i], tags_si.efac_int_sd[i])
+			denom = 1.0 + KM_T3j / cc + KM_EFGGTP * EGT_inv
+			v_intrinsic[i] = (k_TLEmaxj * eff / denom) / 60.0  # codons/s
+		end
+	end
+
+	# Smooth with sliding window (same as V_TL_EL_smooth)
+	v_smooth = zeros(L)
+	v_smooth[1:3]     = [mean(v_intrinsic[1:i+3])   for i in 1:3]
+	v_smooth[4:L-3]   = [mean(v_intrinsic[i-3:i+3]) for i in 4:L-3]
+	v_smooth[L-2:L]   = [mean(v_intrinsic[i-2:L])   for i in L-2:L]
+
+	eps_floor = 1e-6
+	tau = [vi > eps_floor ? 1.0 / vi : 1.0 / eps_floor for vi in v_smooth]
+	total_time = sum(tau)
+	mean_v = L > 0 ? sum(v_smooth) / L : 0.0
+
+	return (tau = tau, v_smooth = v_smooth, total_time_s = total_time,
+			mean_v = mean_v, L = L, t_used = t_used)
+end
+
+"""
+	collect_pool_diagnostics(sol, p, t_sample; primary_gene="rplL")
+
+Reusable diagnostic snapshot at ODE time `t_sample` (min) for the shared
+metabolite/elongation-factor pools — abstracted from the inline block
+in the rplL+RTS comparison cell, so the N-sweep can call it per N.
+
+Returns a NamedTuple:
+- `t_used`           clamped sample time
+- `T3_mean`, `T3_min`, `T3_max`         charged-tRNA (ternary complex) pool, µM
+- `charged_mean`     mean unloaded-tRNA pool (idx.tA1..tY1), µM
+- `EGT`, `EFG`       EF-Tu·GTP and EF-G·GTP, µM
+- `KM_T3j`           ternary-complex Michaelis constant on rplL block
+- `mean_sat`         KM_T3j / mean(T3) — <<1 means saturated → insensitive
+- `RIB_active`       total active ribosomes summed over codon positions, µM
+- `RIB_active_per_gene` per-gene vector (µM)
+- `PRT_primary`      protein concentration of `primary_gene` at t_sample, µM
+"""
+function collect_pool_diagnostics(sol, p, t_sample::Float64; primary_gene::String = "rplL")
+	t_e = clamp(t_sample, sol.t[1], sol.t[end])
+	u   = sol(t_e)
+	tags = p.local_tags_list[1]
+	idx  = tags.idx
+
+	# Charged tRNAs (capital-letter T3 indices) and free tRNA pools.
+	t3      = u[idx.a1t : idx.y1t]
+	charged = u[idx.tA1 : idx.tY1]
+
+	EGT = u[idx.EGT]
+	EFG = u[idx.EFG]
+
+	# Find primary-gene seq index (for KM_T3j + PRT).
+	si_primary = try
+		_find_seq_index(p, primary_gene)
+	catch
+		1
+	end
+	tags_prim = p.local_tags_list[si_primary]
+	KM_T3j    = tags_prim.p_seq.EL.KM_T3j
+
+	mean_T3   = mean(t3)
+	mean_sat  = mean_T3 > 0.0 ? KM_T3j / mean_T3 : Inf
+
+	# Active ribosomes per gene = sum over per-gene codon-position states.
+	n_m = p.vectors.n_metab
+	n_s = p.vectors.n_seq
+	rib_per_gene = zeros(n_s)
+	for i in 1:n_s
+		base = n_m + p.vectors.offsets[i]
+		len  = p.vectors.y_codons_lengths[i]
+		# Codon block layout: [S70, rna, PRT, PTC, codons...] → skip first 4 fields.
+		for j in 5:len
+			rib_per_gene[i] += max(u[base + j], 0.0)
+		end
+	end
+	rib_active = sum(rib_per_gene)
+
+	# Per-gene PRT for the primary gene, snapshot at t_sample.
+	prt_primary = try
+		base = n_m + p.vectors.offsets[si_primary]
+		Float64(u[base + 3])  # PRT slot inside the per-gene block (S70, rna, PRT, PTC, codons...)
+	catch
+		NaN
+	end
+
+	return (
+		t_used = t_e,
+		T3_mean = mean_T3,
+		T3_min  = minimum(t3),
+		T3_max  = maximum(t3),
+		charged_mean = mean(charged),
+		EGT = EGT,
+		EFG = EFG,
+		KM_T3j = KM_T3j,
+		mean_sat = mean_sat,
+		RIB_active = rib_active,
+		RIB_active_per_gene = rib_per_gene,
+		PRT_primary = prt_primary,
+	)
+end
+
+"""
+	extract_u_sequence(u_full, p, seq_idx)
+
+Rebuild the per-sequence state vector `[metabolites; codon states]` for sequence `seq_idx`,
+as passed to `ODE!` / `calculate_V_TL_EL`.
+"""
+function extract_u_sequence(u_full, p, seq_idx::Int)
+	offs = p.vectors.offsets
+	lens = p.vectors.y_codons_lengths
+	n_metab = p.vectors.n_metab
+	n_seq = p.vectors.n_seq
+	@assert 1 <= seq_idx <= n_seq
+	idx = n_metab + offs[seq_idx]
+	len = lens[seq_idx]
+	return vcat(u_full[1:n_metab], u_full[idx+1:idx+len])
+end
+
+function _find_seq_index(p, gene::String)
+	sn = p.local_tags_list[1].species_and_sequences.seq_names
+	i = findfirst(s -> String(s) == gene, sn)
+	isnothing(i) && error("call_model elongation: gene \"$(gene)\" not in seq_names: $(sn)")
+	return Int(i)
+end
+
+"""
+	elongation_ter_metrics(tags, u_seq; eps_v, v_floor_sum)
+
+From the same `V_TL_EL` / ribosome fields as `V_TL_EL_smooth`:
+- `mean_codons_s`: spatial mean of `V_ELO` (codons/s) over the whole ORF — zeros count (no ribosome ⇒ no elongation at that site).
+- `mean_codons_s_active`: mean over sites with `V_ELO > eps_v` only (can differ in count between conditions at one time).
+- `total_elongation_time_s`: Σ 1/max(v, v_floor_sum) over active sites — cumulative-time proxy (Spindler: longer translation time);
+  `v_floor_sum` avoids blow-up when rare codons yield extremely small positive `V_ELO`.
+"""
+function elongation_ter_metrics(tags, u_seq; eps_v::Float64 = 1e-30, v_floor_sum::Float64 = 1e-4)
+	V_TL_EL = calculate_V_TL_EL(tags, u_seq)
+	c_RIB = u_seq[tags.idx_first_codon:end]
+	V_ELO = (V_TL_EL[2:end] ./ 60) ./ max.(c_RIB[1:end-1], eps_v)
+	L = length(V_ELO)
+	pos = V_ELO .> eps_v
+	n_active = count(pos)
+	if !any(pos)
+		return (
+			mean_codons_s = 0.0,
+			mean_codons_s_active = 0.0,
+			total_elongation_time_s = Inf,
+			n_codons_orf = L,
+			n_codons_active = 0,
+		)
+	end
+	vv = V_ELO[pos]
+	return (
+		mean_codons_s = sum(V_ELO) / L,
+		mean_codons_s_active = sum(vv) / n_active,
+		total_elongation_time_s = sum(1 ./ max.(vv, v_floor_sum)),
+		n_codons_orf = L,
+		n_codons_active = n_active,
+	)
+end
+
+"""
 	calculate_translation_rate(df)
 
 Calculates translation rate.
@@ -1672,7 +2176,7 @@ Calculates the translation rate at timepoint 100
 function translation_rate_ODE(sol, p)
 	tags = p.local_tags_list[1]
 	# Zustand zum Zeitpunkt t
-	t_query = 100.0
+	t_query = 150.0
 	u_t = sol(t_query)
 
 	# Raten zum Zeitpunkt t berechnen
@@ -1687,7 +2191,7 @@ function save_results(sol, local_tags_list, save_data)
 	if save_data == true
 		# Save results 
 		timestamp = Dates.format(now(), "yyyy-mm-dd_HH-MM")
-		filename = "output/sol_" * timestamp * ".jld2"
+		filename = "PigA_bg50_u_35_putida" * timestamp * ".jld2"
 
 		@save filename sol local_tags_list
 
@@ -1705,6 +2209,63 @@ function save_translation_rates(translation_rates)
 
 	println("Solution saved at $filename.")
 
+end
+
+# --------------------------- mRNA degradation -----------------------------------------
+
+# ============================================================
+# mRNA degradation and effective mRNA model (concentration-based)
+#
+# Reference:
+# Calabrese L., et al.
+# "How total mRNA influences cell growth"
+# Nature Physics (2024)
+#
+# In this framework:
+# - mRNA is reused by translation (not consumed)
+# - Degradation is first-order
+# - Growth depends on effective mRNA concentration
+# ============================================================
+
+"""
+	degradation_rate(half_life_min::Float64)
+	
+Calculates degradation rate from half-life.
+δ = ln(2) / t_1/2
+"""
+function degradation_rate(half_life_min::Float64)
+    return log(2) / half_life_min
+end
+
+"""
+	degradation_flux(mrna_conc::Float64, delta::Float64)
+	
+Calculates degradation flux (µM / min).
+Returns: δ * mRNA_conc
+"""
+function degradation_flux(
+    mrna_conc::Float64,    # mRNA concentration [µM]
+    delta::Float64         # degradation rate [min⁻¹]
+)
+    return delta * mrna_conc
+end
+
+"""
+	effective_mrna(mrna_conc::Float64, k_init::Float64, delta::Float64)
+	
+Calculates effective mRNA concentration.
+Fraction of mRNA that productively engages ribosomes.
+α = k_init / (k_init + δ)
+Returns: α * mRNA_conc
+"""
+function effective_mrna(
+    mrna_conc::Float64,    # mRNA concentration [µM]
+    k_init::Float64,       # translation initiation rate [min⁻¹]
+    delta::Float64         # degradation rate [min⁻¹]
+)
+    # Fraction of mRNA that productively engages ribosomes
+    alpha = k_init / (k_init + delta)
+    return alpha * mrna_conc
 end
 
 # --------------------------- mRNA competition -----------------------------------------
@@ -1725,13 +2286,14 @@ function calculate_RNA_position(tags, seq_names, seqs)
 	end
 
 	n_RNA 	= Vector{Int}()
-	idx 	= n_metab -4
+	idx 	= n_metab - 4  # last shared metabolite position
 
+	# Per-gene block layout: [S70, rna, PRT, PTC, codon_1, ..., codon_L]
+	# rna is the 2nd element in each block (offset +2 from end of previous block)
 	for sequence_length in n_ribo 
-		idx += 1
-		push!(n_RNA, idx)
-		idx += 4
-		idx += sequence_length
+		rna_pos = idx + 2  # S70 is at idx+1, rna is at idx+2
+		push!(n_RNA, rna_pos)
+		idx += 4 + sequence_length  # advance past full block (4 output vars + codons)
 	end
 
 	return n_RNA
@@ -1759,12 +2321,56 @@ end
 # ---------------------- Model validation ----------------------------------
 
 """
-	call_model(sequence_file, heterologous_genes, num_background_genes)
+	call_model(sequence_file, heterologous_genes, num_background_genes;
+	           custom_scale=nothing, growth_rate=1, mRNA_multiplier=1.0,
+	           het_mRNA_conc=nothing, background_selection=:first,
+	           ode_reltol=nothing, ode_abstol=nothing, ode_maxiters=nothing,
+	           return_details=false, return_elongation=false, elongation_time=20.0,
+	           return_sol=false)
 
 01.12.2025; Model wrapped in a function to call it with one line.
+19.03.2026; Extended with keyword arguments for sensitivity analysis.
+  - custom_scale:    a txtl_types.scale struct (default: init_scale())
+  - growth_rate:     µ value (default: 1)
+  - mRNA_multiplier: multiplicative factor applied to all mRNA concentrations (default: 1.0)
+  - het_mRNA_conc:   if set, overrides mRNA for heterologous genes only (background unchanged).
+                     Either a single number (µM, applied to every heterologous gene), or a
+                     Dict{String,Float64} mapping gene name → µM. Takes priority over mRNA_multiplier
+                     for those genes.
+  - background_selection: :first (default) = first N rows of the mRNA table (spreadsheet order);
+                          :top_mRNA = N genes with highest tabulated mRNA (after mRNA_multiplier and
+                          het_mRNA_conc), excluding heterologous names — stronger ribosome competition
+                          per gene slot without increasing N.
+  - ode_reltol / ode_abstol / ode_maxiters: optional overrides for the main multi-sequence solve.
+                          If unset, tolerances are relaxed automatically when n_sequences > 32 (stiff DAE).
+  - return_details:  if true, returns NamedTuple (translation_rate, final_PRT, …); otherwise scalar.
+  - return_elongation: if true (requires return_details), also returns `elongation_rplL` snapshot.
+  - elongation_time: time (same units as `tspan`, default 20.0) for that snapshot.
+  - return_sol: if true (requires return_details), the returned NamedTuple also contains `sol` and `p`,
+    so the caller can post-process (e.g. `spindler_codon_translation_time(res.sol, res.p, "rplL")`).
+
+  If the main solve fails or throws, call_model prints the largest-|du| state components (see print_problematic_rhs).
 """
 
-function call_model(sequence_file, heterologous_genes, num_background_genes)
+function call_model(sequence_file, heterologous_genes, num_background_genes;
+                    custom_scale = nothing,
+                    growth_rate = 1,
+                    mRNA_multiplier = 1.0,
+                    het_mRNA_conc = nothing,
+                    background_selection = :first,
+                    ode_reltol = nothing,
+                    ode_abstol = nothing,
+                    ode_maxiters = nothing,
+                    return_details = false,
+                    return_elongation = false,
+                    elongation_time::Float64 = 20.0,
+					t_end::Float64 = 100.0,
+                    return_sol = false,
+                    spindler_tx = false,
+                    static_EFs = false,
+                    spindler_75pct = false,
+                    progress_ref::Union{Nothing, Base.RefValue} = nothing,
+                    progress_save_every_min::Float64 = 1.0)
 
 	include("parameters.jl")
 	
@@ -1772,25 +2378,103 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	seqs_to_use 	    = (1,2401)                                 # Range of sequences in Fasta file. Takes all sequences from sequence a to sequence b
 
 	# initialization of data containers
-	scale = txtl_types.init_scale()         # struct that makes it possible to influence rates by scaling them
+	scale = isnothing(custom_scale) ? txtl_types.init_scale() : custom_scale
 
-	µ = 1                    # A growth rate (0.1 to 1.8) can be chosen and the proteins of the TXTL machinery will be tuned according to that growth rate and the processivity of the RNA polymerase
+	µ = growth_rate
 
-	## flags for efficiency factors
-	positive_aminoacid	= true 
+	## flags for efficiency factors (Spindler MATLAB: positive_aminoacid=false)
+	positive_aminoacid	= false
 	anti_shinedalgarno	= false      # If no hybridization file is available put flag to false. We apply the intaRNA program's intarna function (q: aSD, t: sequence, SeedBP: 5, out: tMinE) to generate a hybridization profile along the sequence. Link to the website: https://rna.informatik.uni-freiburg.de/IntaRNA/Input.jsp;jsessionid=2AE257E91E7276283F22CD77A5A8AA03
-	dynamic_efficiency	= true 
+	dynamic_efficiency	= true
 	save_data           = false
 
-	flags = txtl_types.flags(positive_aminoacid, anti_shinedalgarno, dynamic_efficiency)
+	flags = txtl_types.flags(positive_aminoacid, anti_shinedalgarno, dynamic_efficiency, spindler_tx, static_EFs, spindler_75pct)
 
 	# Data import --------
 	mRNA 		= to_DataFrame(readmatrix("../data/input/mRNA_concentrations.xlsx", "mRNA_concentration", "A1:B2402"))
+	mRNA = filter(row -> isa(row.mRNA, Number), mRNA)
 	mRNA.mRNA 	= Float64.(mRNA.mRNA)
+	mRNA.mRNA .*= mRNA_multiplier
 
-	background_genes = String.(first(mRNA.gene, num_background_genes))
+	if !isnothing(het_mRNA_conc)
+		# Backwards-compatible behavior:
+		#   - Real scalar  → apply to every heterologous gene (legacy single-value path).
+		#   - Dict{String,Real} → apply override to ANY gene named in the dict
+		#     (heterologous OR background). All heterologous genes must still be
+		#     covered by the dict (error if not). This lets callers pin the mRNA
+		#     concentration of background genes for fixed-budget / Spindler-style
+		#     experiments without changing the rest of the API.
+		if het_mRNA_conc isa Real
+			c = Float64(het_mRNA_conc)
+			for gene in heterologous_genes
+				g = String(gene)
+				row_idx = findfirst(==(g), mRNA.gene)
+				if !isnothing(row_idx)
+					mRNA.mRNA[row_idx] = c
+				else
+					push!(mRNA, (gene = g, mRNA = c))
+				end
+			end
+		elseif het_mRNA_conc isa AbstractDict
+			for gene in heterologous_genes
+				g = String(gene)
+				haskey(het_mRNA_conc, g) ||
+					error("call_model: het_mRNA_conc Dict has no key \"" * g * "\" (heterologous genes: " * join(String.(heterologous_genes), ", ") * ")")
+			end
+			for (k, v) in het_mRNA_conc
+				g = String(k)
+				c = Float64(v)
+				row_idx = findfirst(==(g), mRNA.gene)
+				if !isnothing(row_idx)
+					mRNA.mRNA[row_idx] = c
+				else
+					push!(mRNA, (gene = g, mRNA = c))
+				end
+			end
+		else
+			error("call_model: het_mRNA_conc must be Real, Nothing, or AbstractDict{String,<:Real}, got $(typeof(het_mRNA_conc))")
+		end
+	end
+
+	seqs_all_fasta, _ = seqs_import_transcripts(sequence_file, seqs_to_use)
+	fasta_genes = Set{String}(String.(keys(seqs_all_fasta)))
+	for g in heterologous_genes
+		String(g) in fasta_genes ||
+			error("call_model: heterologous gene \"$(g)\" not found in FASTA \"$(sequence_file)\"")
+	end
+
+	if num_background_genes <= 0
+		background_genes = String[]
+	elseif background_selection == :top_mRNA
+		het_set = Set(String.(heterologous_genes))
+		pool = filter(row -> !(String(row.gene) in het_set) && String(row.gene) in fasta_genes, mRNA)
+		if nrow(pool) == 0
+			background_genes = String[]
+		else
+			pool_sorted = sort(pool, :mRNA, rev = true)
+			n_bg = min(num_background_genes, nrow(pool_sorted))
+			background_genes = String.(pool_sorted.gene[1:n_bg])
+		end
+	elseif background_selection == :first
+		het_set = Set(String.(heterologous_genes))
+		background_genes = String[]
+		for i in 1:nrow(mRNA)
+			length(background_genes) >= num_background_genes && break
+			g = String(mRNA.gene[i])
+			g in het_set && continue
+			g in fasta_genes || continue
+			push!(background_genes, g)
+		end
+	else
+		error("call_model: background_selection must be :first or :top_mRNA, got $(repr(background_selection))")
+	end
+
+	if num_background_genes > 0 && length(background_genes) < num_background_genes
+		@warn "call_model: fewer background genes than requested (not enough names in FASTA + mRNA table)" requested = num_background_genes got = length(background_genes)
+	end
+
 	genes = vcat(heterologous_genes, background_genes)
-	println("Number of sequences: $(length(genes))") 
+	println("Number of sequences: $(length(genes)) (background_selection=$(background_selection))")
 
 	mRNA = subset(mRNA, :gene => ByRow(in(genes)))
 
@@ -1827,9 +2511,67 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	# Elongation factor balance 
 	EF_balance!(tags_pre, y0, y_steady_state)
 
+	print_ef_pool_literature_audit(y_steady_state, initial_concentrations, p_met, idx)
 
 	# Build states vector for multiple sequences 
 	y0_all = combined_states_vector(tags_pre, y_steady_state, seqs, seq_names)
+
+	# Initialize mRNA concentrations from data into the state vector
+	include_mRNA_concentrations!(y0_all, tags_pre, seq_names, seqs, mRNA)
+
+	# Spindler 75%: pre-load ribosomes on mRNA at the paper's assumed steady state.
+	# "It was assumed that 75% of ribosomes are active at the steady state of µ = 1.0 h⁻¹."
+	# Active 70S ribosomes require both a 30S and a 50S subunit, so the pool is limited
+	# by whichever subunit is scarcer.  We distribute 75% uniformly across codon positions,
+	# proportional to mRNA_i × L_i.
+	if spindler_75pct
+		sc1 = y0_all[idx.SC1]; sc2 = y0_all[idx.SC2]; sc3 = y0_all[idx.SC3]
+		sc4 = y0_all[idx.SC4]; pic = y0_all[idx.PIC]
+		total_30S = y0_all[idx.S30] + sc1 + sc2 + sc3 + sc4 + pic
+		total_50S = y0_all[idx.S50]
+		total_rib = min(total_30S, total_50S)
+
+		target_active = 0.75 * total_rib
+		target_free_30S = total_30S - target_active
+
+		# Release cascade intermediates, put remaining free 30S back
+		y0_all[idx.IF3] += sc1 + sc2 + sc3 + sc4 + pic
+		y0_all[idx.IF1] += sc2 + sc4 + pic
+		y0_all[idx.IF2] += sc3 + sc4 + pic
+		y0_all[idx.b1t] += pic
+		y0_all[idx.SC1] = 0.0; y0_all[idx.SC2] = 0.0; y0_all[idx.SC3] = 0.0
+		y0_all[idx.SC4] = 0.0; y0_all[idx.PIC] = 0.0
+		y0_all[idx.S30] = target_free_30S
+		y0_all[idx.S50] = max(total_50S - target_active, 0.0)
+
+		# Per-gene block layout in y0_all: [shared_metab..., S70_1, rna_1, PRT_1, PTC_1, codons_1..., ...]
+		n_shared = idx.PTC - 4
+		gene_weights = Float64[]
+		gene_n_codons = Int[]
+		for sn in seq_names
+			mRNA_i = filter(row -> row.gene == sn, mRNA).mRNA[1]
+			L_i = length(seqs[sn].Codon) - 1
+			push!(gene_weights, mRNA_i * L_i)
+			push!(gene_n_codons, L_i)
+		end
+		w_total = sum(gene_weights)
+
+		offset = n_shared
+		loaded_total = 0.0
+		for (i, sn) in enumerate(seq_names)
+			active_i = target_active * gene_weights[i] / w_total
+			n_cod = gene_n_codons[i]
+			rib_per_pos = active_i / n_cod
+			for j in 1:n_cod
+				y0_all[offset + 4 + j] = rib_per_pos
+			end
+			loaded_total += active_i
+			offset += 4 + n_cod
+		end
+
+		println("  Spindler 75%: pre-loaded $(round(loaded_total; digits=2)) µM active ribosomes across $(length(seq_names)) genes")
+		println("    free S30 = $(round(y0_all[idx.S30]; digits=2)) µM, S50 = $(round(y0_all[idx.S50]; digits=2)) µM")
+	end
 
 	# Prepare per-sequence tags (for use in ODE)
 	local_tags_list = generate_local_tags(seqs, seq_names, tags_pre, efac_pos_aa_dict, efac_int_sd_dict, mRNA);
@@ -1843,7 +2585,7 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	mass_diag_all[conserved] .= 0.0
 	M = Diagonal(mass_diag_all)  # Much more memory-efficient: O(n) instead of O(n²)
 
-	tspan 	= (0.0, 100.0) ## Define time span for the simulation
+	tspan 	= (0.0, t_end) ## Define time span for the simulation
 
 	p       = generate_p(local_tags_list)
 
@@ -1854,14 +2596,121 @@ function call_model(sequence_file, heterologous_genes, num_background_genes)
 	# --- Timing the integration step ---
 	# println("\n⏳ Integrating ODE system (distributed, test set)...")
 
-	sol     = solve(prob, FBDF(autodiff=false), reltol = 1e-8, abstol = 1e-6); ## Solve ODE system
+	n_seq = length(seq_names)
+	# Scale tolerances with system size.  Biological parameter accuracy is ~10–20 %;
+	# tighter than ~1e-4 buys no real precision but costs orders of magnitude in wall time.
+	if n_seq > 40
+		def_reltol = 1e-4;  def_abstol = 1e-3;  def_mxit = 500_000
+	elseif n_seq > 20
+		def_reltol = 1e-6;  def_abstol = 1e-5;  def_mxit = 2_000_000
+	else
+		def_reltol = 1e-8;  def_abstol = 1e-6;  def_mxit = 5_000_000
+	end
+	rtol = something(ode_reltol, def_reltol)
+	atol = something(ode_abstol, def_abstol)
+	mxit = something(ode_maxiters, def_mxit)
+	println("  Solver: FBDF  rtol=$rtol  atol=$atol  maxiters=$mxit  (n_seq=$n_seq)")
 
-	println("Integration completed!")
+	# Tier-2 progress capture (optional). If the caller passes a `progress_ref`
+	# we install a PeriodicCallback that writes (t, copy(u), p) to the ref every
+	# `progress_save_every_min` sim-minutes. The intent: when the outer
+	# `_run_with_timeout` wrapper kills the wait on a slow run, the orphan task
+	# keeps writing to the ref, so the main thread can still inspect the LAST
+	# integrated state with `print_timeout_snapshot_diagnostic`. Without this,
+	# timeouts left zero diagnostic data behind (see CHANGELOG 2026-05-20).
+	#
+	# Initial fire writes y0_all at t=0, so even a hang BEFORE the first
+	# successful step yields an inspectable snapshot.
+	local solve_cb
+	if progress_ref !== nothing
+		_save_dt = max(progress_save_every_min, 0.05)
+		solve_cb = PeriodicCallback(_save_dt; initial_affect = true) do integrator
+			progress_ref[] = (t = integrator.t,
+			                  u = copy(integrator.u),
+			                  p = integrator.p)
+			return nothing
+		end
+	else
+		solve_cb = nothing
+	end
 
-	translation_rate = translation_rate_ODE(sol, p)
+	local sol
+	try
+		if solve_cb === nothing
+			sol = solve(prob, FBDF(autodiff = false);
+			            reltol = rtol, abstol = atol, maxiters = mxit,
+			            save_everystep = false)
+		else
+			sol = solve(prob, FBDF(autodiff = false);
+			            reltol = rtol, abstol = atol, maxiters = mxit,
+			            save_everystep = false,
+			            callback = solve_cb)
+		end
+	catch e
+		println("call_model: solve() threw an error — printing RHS at initial u0:")
+		print_problematic_rhs(y0_all, p, 0.0; top_k = 20)
+		rethrow(e)
+	end
 
+	if !successful_retcode(sol)
+		@warn "call_model: main ODE solve did not succeed" sol.retcode n_sequences = n_seq rtol atol maxiters = mxit
+		u_bad = length(sol.t) > 0 ? sol.u[end] : y0_all
+		t_bad = length(sol.t) > 0 ? sol.t[end] : 0.0
+		println("call_model: printing largest |du| at ", length(sol.t) > 0 ? "last internal step" : "initial u0", " (t=", t_bad, ")")
+		print_problematic_rhs(u_bad, p, t_bad; top_k = 20)
+	end
 
-	return translation_rate
+	if successful_retcode(sol)
+		println("Integration completed!")
+	else
+		println("Integration finished without success (see problematic RHS printout above).")
+	end
+
+	local translation_rate, final_PRT
+	if successful_retcode(sol) && length(sol.t) > 0
+		try
+			translation_rate = translation_rate_ODE(sol, p)
+		catch
+			translation_rate = NaN
+		end
+	else
+		translation_rate = NaN
+	end
+
+	if return_details
+		tags = p.local_tags_list[1]
+		if successful_retcode(sol) && length(sol.t) > 0
+			try
+				u_final = sol(t_end)
+				final_PRT = Float64(u_final[tags.idx.PRT])
+			catch
+				final_PRT = NaN
+			end
+		else
+			final_PRT = NaN
+		end
+		elong_rplL = nothing
+		if return_elongation && successful_retcode(sol) && length(sol.t) > 0
+			try
+				t_e = min(max(elongation_time, sol.t[1]), sol.t[end])
+				u_fin = sol(t_e)
+				si = _find_seq_index(p, "rplL")
+				u_seq = extract_u_sequence(u_fin, p, si)
+				tags_si = p.local_tags_list[si]
+				elong_rplL = elongation_ter_metrics(tags_si, u_seq)
+			catch e
+				@warn "call_model: elongation metrics for rplL failed" exception = e
+			end
+		end
+		base = (translation_rate = translation_rate, final_PRT = final_PRT, elongation_rplL = elong_rplL)
+		if return_sol
+			return merge(base, (sol = sol, p = p))
+		else
+			return base
+		end
+	else
+		return translation_rate
+	end
 end
 
 
@@ -1874,10 +2723,10 @@ end
 function calculate_absolute_protein_µgmL(c_x0, µ, t_process, weight_cell, volume_cell, translation_rate, mass_protein) # give mass_protein in Dalton, t in hours, everything else in SI units 
 	
 	qp 				= calculate_qp(translation_rate, weight_cell, volume_cell) 	# µmol/gDW/h
-	c_p 			= qp *c_x0 / µ *(exp(µ*t_process) -1) 						# µM
-	mass_protein 	= mass_protein/1000 										# g/µmol
-	c_gL 			= c_p * mass_protein										# g/L -> mg/mL
-	c_µgmL			= c_gL * 1000												# µg/mL
+	c_p 			= qp *c_x0 / µ *(exp(µ*t_process) -1) 						# µmol/L
+	mass_protein 	= mass_protein/1e6 	###??? is this correct?			# g/µmol  (Da ÷ 10⁶)
+	c_gL 			= c_p * mass_protein										# g/L
+	c_µgmL			= c_gL * 1000												# µg/mL = mg/L
 	
 	return c_µgmL
 end
@@ -1896,4 +2745,168 @@ function calculate_qp(translation_rate, weight_cell, volume_cell)
 	v_t 				= translation_rate*60				# µmol/L_cell/h
 	qp  				= v_t * volume_per_gram				# µmol/gDW/h
 	return qp 
+end
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Spindler-faithful RTS comparison  (ACS Synth. Biol. 2025, 10.1021/acssynbio.4c00578)
+#
+# Paper's design:
+#   WITHOUT RTS: rplL alone (1 sequence) — no competition — baseline ε
+#   WITH    RTS: rplL + 3 eCU shuffled   — shared pool competition — ε shifts
+# Uses Spindler transcription/degradation competition kinetics (spindler_tx flag)
+# and high enough mRNA to load ~75% of ribosomes (paper: ~15 µM active at µ=1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+"""
+	spindler_rts_comparison(; kwargs...)
+
+Spindler-faithful comparison: rplL translation time **without** vs **with** RTS.
+
+Paper conditions (Spindler et al. ACS Synth. Biol. 2025):
+  - Predicted ~8% longer translation time for rplL with RTS
+  - "Without RTS": MAIN_single_sequence.m — all scales=1, V_TC_scale=1
+    → RNA_ss ≈ 0.001 µM, V_IN_70SIC_scale=1, ARS_scale=1
+  - "With RTS": MAIN_single_sequence_plus_reference_transcriptome.m —
+    V_TC_scale=[340,1133,1133,1133], V_IN_70SIC_scale=75, V_IN_IF2D_scale=2, ARS_scale=20
+    → rplL RNA_ss ≈ 0.46 µM, each RTS RNA_ss ≈ 0.31 µM
+
+The two MATLAB scripts use different model configurations.  The alone case
+represents rplL in isolation (default machinery); the +RTS case represents
+rplL competing with a reference transcriptome for T3/tRNA resources.
+
+Keyword arguments:
+- `rplL_seq`:       rplL CDS nucleotide string
+- `rts_seqs`:       Dict("C_eCU_1" => seq, …) — the 3 RTS CDS strings
+- `growth_rate`:    µ (default 1, paper µ=1 h⁻¹)
+- `m_rplL_alone`:   mRNA for rplL in alone case (V_TC_scale=1 ss ≈ 0.001 µM)
+- `m_rplL_rts`:     mRNA for rplL in +RTS case (V_TC_scale=340 ss ≈ 0.46 µM)
+- `m_rts_each`:     mRNA per RTS in µM (V_TC_scale=1133 ss ≈ 0.31 µM)
+- `t_sample`:       ODE time (min) for elongation snapshot (default 100.0)
+"""
+function spindler_rts_comparison(;
+		rplL_seq::String,
+		rts_seqs::Dict{String,String},
+		growth_rate::Int = 1,
+		m_rplL_alone::Float64 = 0.001,
+		m_rplL_rts::Float64 = 0.46,
+		m_rts_each::Float64 = 0.31,
+		t_sample::Float64 = 100.0,
+		ode_reltol::Float64 = 1e-8,
+		ode_abstol::Float64 = 1e-6,
+		ode_maxiters::Int = 5_000_000,
+		static_EFs::Bool = true,
+		spindler_75pct::Bool = true)
+
+	rts_names = sort(collect(keys(rts_seqs)))
+	n_rts = length(rts_names)
+	@assert n_rts > 0 "Need at least one RTS sequence"
+
+	fasta_dir = joinpath(@__DIR__, "..", "data", "sequences")
+	mkpath(fasta_dir)
+	_clean(s) = replace(replace(strip(s), "\n" => ""), "\r" => "")
+
+	# ── FASTA for "without RTS": rplL only ──
+	alone_name = "spindler_alone.fa"
+	open(joinpath(fasta_dir, alone_name), "w") do io
+		println(io, ">rplL"); println(io, _clean(rplL_seq))
+	end
+
+	# ── FASTA for "with RTS": rplL + eCU sequences ──
+	rts_fa_name = "spindler_rts.fa"
+	open(joinpath(fasta_dir, rts_fa_name), "w") do io
+		println(io, ">rplL"); println(io, _clean(rplL_seq))
+		for nm in rts_names
+			println(io, ">$nm"); println(io, _clean(rts_seqs[nm]))
+		end
+	end
+
+	# Per-gene rna is separate in the state vector; het_mRNA_conc sets the initial
+	# mRNA concentration for each gene independently.
+	conc_alone = Dict("rplL" => m_rplL_alone)
+	conc_rts   = Dict{String,Float64}("rplL" => m_rplL_rts)
+	for nm in rts_names; conc_rts[nm] = m_rts_each; end
+
+	m_total_rts = m_rplL_rts + n_rts * m_rts_each
+	println("Spindler comparison (paper design):")
+	println("  WITHOUT RTS: rplL alone, mRNA = $m_rplL_alone µM  (DEFAULT scales, 1 sequence)")
+	println("  WITH    RTS: rplL + $(n_rts) eCU, mRNA rplL=$m_rplL_rts µM  (SPINDLER scales, $(1+n_rts) sequences)")
+
+	# Spindler-faithful scaling factors (from MAIN_single_sequence_plus_reference_transcriptome.m)
+	# These are ONLY used for the +RTS case.  The alone case uses defaults (all scales=1),
+	# matching MAIN_single_sequence.m.
+	spindler_scale = txtl_types.make_scale(
+		V_IN_70SIC_scale = 75.0,
+		V_IN_IF2D_scale  = 2.0,
+		ARS_scale        = 20.0 .* ones(20),
+	)
+
+	# ── Run WITHOUT RTS (rplL alone — default scales, matching MAIN_single_sequence.m) ──
+	println("\n──── Running WITHOUT RTS (rplL alone, DEFAULT scales) ────")
+	res_alone = call_model(alone_name, ["rplL"], 0;
+		growth_rate = growth_rate,
+		het_mRNA_conc = conc_alone,
+		ode_reltol = ode_reltol, ode_abstol = ode_abstol,
+		ode_maxiters = ode_maxiters,
+		return_details = true, return_sol = true,
+		static_EFs = static_EFs,
+		spindler_75pct = false)
+
+	# ── Run WITH RTS (Spindler scales, matching MAIN_..._reference_transcriptome.m) ──
+	println("\n──── Running WITH RTS (rplL + eCU, SPINDLER scales) ────")
+	het_rts = vcat(["rplL"], rts_names)
+	res_rts = call_model(rts_fa_name, het_rts, 0;
+		custom_scale = spindler_scale,
+		growth_rate = growth_rate,
+		het_mRNA_conc = conc_rts,
+		ode_reltol = ode_reltol, ode_abstol = ode_abstol,
+		ode_maxiters = ode_maxiters,
+		return_details = true, return_sol = true,
+		static_EFs = static_EFs,
+		spindler_75pct = false)
+
+	# ── Active ribosome loading diagnostic (per-gene breakdown) ──
+	function _active_rib_per_gene(sol, p, t)
+		u = sol(clamp(t, sol.t[1], sol.t[end]))
+		n_m = p.vectors.n_metab; n_s = p.vectors.n_seq
+		per_gene = zeros(n_s)
+		for i in 1:n_s
+			base = n_m + p.vectors.offsets[i]
+			len = p.vectors.y_codons_lengths[i]
+			for j in 5:len
+				per_gene[i] += max(u[base + j], 0.0)
+			end
+		end
+		return per_gene
+	end
+	rib_alone_vec = _active_rib_per_gene(res_alone.sol, res_alone.p, t_sample)
+	rib_rts_vec   = _active_rib_per_gene(res_rts.sol, res_rts.p, t_sample)
+	rib_alone = sum(rib_alone_vec)
+	rib_rts   = sum(rib_rts_vec)
+
+	# ── Spindler codon-by-codon translation time ──
+	sp_alone = spindler_codon_translation_time(res_alone.sol, res_alone.p, "rplL"; t_sample = t_sample)
+	sp_rts   = spindler_codon_translation_time(res_rts.sol,   res_rts.p,  "rplL"; t_sample = t_sample)
+
+	delta_tau = sp_rts.tau .- sp_alone.tau
+	delta_total = sp_rts.total_time_s - sp_alone.total_time_s
+	pct_longer = 100 * (sp_rts.total_time_s / sp_alone.total_time_s - 1)
+
+	return (
+		sp_alone = sp_alone,
+		sp_rts = sp_rts,
+		delta_tau = delta_tau,
+		delta_total_s = delta_total,
+		pct_longer = pct_longer,
+		res_alone = res_alone,
+		res_rts = res_rts,
+		rib_alone = rib_alone,
+		rib_rts = rib_rts,
+		rib_alone_vec = rib_alone_vec,
+		rib_rts_vec = rib_rts_vec,
+		t_sample = t_sample,
+		m_rplL_alone = m_rplL_alone,
+		m_rplL_rts = m_rplL_rts,
+		m_rts_each = m_rts_each,
+	)
 end

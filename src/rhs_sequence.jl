@@ -35,7 +35,7 @@ function rhs_sequence!(du, u, p)
     # Positivity guard: the implicit solver can produce tiny negative ribosome occupancies.
     # Using negative occupancies directly in flux formulas can amplify the error and create runaway negatives.
     # We compute fluxes using non-negative ribosome occupancies.
-    total_RNA = tags.RNA
+    total_RNA = max(rna, 0.0)  # Dynamic mRNA from state vector (was tags.RNA)
     @inbounds for k in 1:12
         total_RNA += max(c_RIB[k], 0.0)
     end
@@ -58,7 +58,11 @@ function rhs_sequence!(du, u, p)
             @inbounds for k in i:(i+11)
                 denom -= max(c_RIB[k], 0.0)
             end
-            tags.q_R_elo[i] = 1 - max(c_RIB[i+12], 0.0) / denom
+            # Clamp to [0,1]: the occupancy factor is a probability.
+            # Without clamping, high local ribosome density makes denom tiny,
+            # c_RIB[i+12]/denom >> 1, q_R_elo becomes hugely negative,
+            # producing unphysical reverse elongation flux (TASEP mean-field breakdown).
+            tags.q_R_elo[i] = clamp(1 - max(c_RIB[i+12], 0.0) / denom, 0.0, 1.0)
         
         end
     end 
@@ -76,7 +80,7 @@ function rhs_sequence!(du, u, p)
             @inbounds for k in i:(length(c_RIB)-1)
                 denom -= max(c_RIB[k], 0.0)
             end
-            tags.q_R_elo[i] = 1 - (max(c_RIB[end], 0.0) + max(PTC, 0.0)) / denom
+            tags.q_R_elo[i] = clamp(1 - (max(c_RIB[end], 0.0) + max(PTC, 0.0)) / denom, 0.0, 1.0)
         end
     end
 
@@ -89,7 +93,11 @@ function rhs_sequence!(du, u, p)
         
 
     # V_EL
-    C_vect = reshape(u[1:tags.num_species], 1, tags.num_species)  # Directly assign
+    # Clamp metabolite concentrations to ≥ 0 before computing effective T3 pools.
+    # Negative T3 complexes (numerical drift) would make c_Codon ≈ 0 → division
+    # blow-up in matrix_free_KT3! and KM_T3j/cc denominator collapse.
+    u_metab_safe = max.(@view(u[1:tags.num_species]), 0.0)
+    C_vect = reshape(u_metab_safe, 1, tags.num_species)
     c_Codon = tags.t3_Codon_struc * C_vect'
 
     V_TL_EL	= zeros(tags.len_sequence-1);
@@ -193,10 +201,37 @@ function rhs_sequence!(du, u, p)
 
     # concentration of the ternary-complex
     du[1: tags.num_species] .+= - tags.K_T3;
-    du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
-    du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
+    if !tags.flags.static_EFs
+        du[tags.idx.EGT]  += - V_TL_EL_sum - f_s * k_rec_min * PTC;	# Rate of EFG_GTP 
+        du[tags.idx.EGD]  += + V_TL_EL_sum + f_s * k_rec_min * PTC;	# Rate of EFG_GDP
+    end
 
-    du[tags.idx.rna] += - V_TL_EL[12];
+    # mRNA dynamics: ribosome clearing the RBS frees mRNA for new initiation
+    # (matches MATLAB: rate.RNA += V_TL_EL(12), rate.rna -= V_TL_EL(12))
+    if length(V_TL_EL) >= 12
+        du[tags.idx.rna] += V_TL_EL[12]
+    end
+
+    rna_conc = max(u[tags.idx.rna], 0.0)
+
+    if tags.flags.spindler_tx
+        # Spindler et al. 2025 competition kinetics (SI eqs).
+        # V_TCmax is in nuc·µM/min; divide by L_nuc to get µM_mRNA/min.
+        # Architecture: all sequences share one rna pool in u[idx.rna].
+        n_seq_f = Float64(length(tags.seq_names))
+        L_nuc = Float64(3 * tags.len_sequence)
+        V_TC_s  = (V_TCmax / L_nuc) * n_DNA_s / (K_M_D + n_seq_f * n_DNA_s)
+        V_deg_s = (rna_conc > 0.0) ? V_degmax * (rna_conc / n_seq_f) / (K_M_deg + rna_conc) : 0.0
+        du[tags.idx.rna] += V_TC_s - V_deg_s
+    else
+        # Michaelis-Menten production/degradation (matches MATLAB V_TC / V_deg time scale).
+        # Steady state: rna → tags.RNA.  Effective δ ≈ V_degmax/(K_M_deg + C_RNE + RNA)
+        # ≈ 5 /min, fast enough to balance V_IN_70SIC consumption from rhs_metabolites.
+        K_eff = K_M_deg + C_RNE
+        production_rate = V_degmax * tags.RNA / (K_eff + tags.RNA)
+        deg_flux = (rna_conc > 0.0) ? V_degmax * rna_conc / (K_eff + rna_conc) : 0.0
+        du[tags.idx.rna] += production_rate - deg_flux
+    end
 
     # save RIB in du
     du[tags.idx_first_codon:end] .+= tags.rate_RIB;

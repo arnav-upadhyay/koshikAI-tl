@@ -22,7 +22,7 @@ positive_aminoacid	= true
 anti_shinedalgarno	= false      # If no hybridization file is available put flag to false. We apply the intaRNA program's intarna function (q: aSD, t: sequence, SeedBP: 5, out: tMinE) to generate a hybridization profile along the sequence. Link to the website: https://rna.informatik.uni-freiburg.de/IntaRNA/Input.jsp;jsessionid=2AE257E91E7276283F22CD77A5A8AA03
 dynamic_efficiency	= true 
 
-flags = txtl_types.flags(positive_aminoacid, anti_shinedalgarno, dynamic_efficiency)
+flags = txtl_types.flags(positive_aminoacid, anti_shinedalgarno, dynamic_efficiency, false, false, false)
 
 ## Import information about model species and sequences 
 seqs, seq_names, hyb_file_dict, species_and_seqs, idx = species_and_sequences(µ, sequence_file, hybrid_file, flags)
@@ -54,6 +54,8 @@ y_steady_state = preintegration(tags_pre, y0, M);
 
 # Elongation factor balance 
 EF_balance!(tags_pre, y0, y_steady_state)
+
+print_ef_pool_literature_audit(y_steady_state, initial_concentrations, p_met, idx)
 
 # Build states vector for multiple sequences 
 y0_all = combined_states_vector(tags_pre, y_steady_state, seqs, seq_names)
