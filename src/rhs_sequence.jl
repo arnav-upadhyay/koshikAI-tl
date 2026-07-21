@@ -215,13 +215,28 @@ function rhs_sequence!(du, u, p)
     rna_conc = max(u[tags.idx.rna], 0.0)
 
     if tags.flags.spindler_tx
-        # Spindler et al. 2025 competition kinetics (SI eqs).
-        # V_TCmax is in nuc·µM/min; divide by L_nuc to get µM_mRNA/min.
-        # Architecture: all sequences share one rna pool in u[idx.rna].
-        n_seq_f = Float64(length(tags.seq_names))
-        L_nuc = Float64(3 * tags.len_sequence)
-        V_TC_s  = (V_TCmax / L_nuc) * n_DNA_s / (K_M_D + n_seq_f * n_DNA_s)
-        V_deg_s = (rna_conc > 0.0) ? V_degmax * (rna_conc / n_seq_f) / (K_M_deg + rna_conc) : 0.0
+        # Spindler et al. 2025 transcription / degradation with EXPLICIT competition for
+        # the shared RNA-polymerase (C_RNP) and RNase E (C_RNE) pools — faithful port of
+        # MOD_seq_rhs.m L22-43.  The polymerase pool in the denominator is what caps total
+        # transcription (and lets the active-ribosome fraction settle below 100 %); the old
+        # formula dropped both C_D and C_RNP, so mRNA over-produced and saturated the pool.
+        #
+        # Per-gene DNA dosage (Spindler's V_TC_scale(ID)) and the total over all genes are
+        # carried on the local tags, so the RNA-polymerase competition term is now EXACT for
+        # heterogeneous dosing (e.g. rplL=340 vs eCU=1133) rather than the uniform-count
+        # approximation.  V_TCmax is nuc·µM/min; divide by L_nuc to get µM_mRNA/min.
+        L_nuc    = Float64(3 * tags.len_sequence)
+        n_seq    = tags.species_and_sequences.no_of_seqs
+        s_dose   = tags.V_TC_dose                                 # this gene's DNA dosage
+        tot_dose = tags.V_TC_dose_total                           # Σ dosage over all genes
+        # n_DNA_t − n_DNA_s : competing DNA (Σ_other − self); 0 for a single gene (MATLAB L22-24)
+        comp_DNA = n_seq <= 1 ? 0.0 : (tot_dose - s_dose) - s_dose
+        comp_RNA = n_seq <= 1 ? 0.0 : (n_seq - 1) * rna_conc      # Σ_other RNA ≈ (n_seq−1)·rna
+        V_TC_s  = (V_TCmax / L_nuc) * C_D * s_dose /
+                  (K_M_D * (1.0 + comp_DNA * 0.001 / K_M_D) + C_RNP + C_D * s_dose)
+        V_deg_s = (rna_conc > 0.0) ?
+                  V_degmax * rna_conc /
+                  (K_M_deg * (1.0 + comp_RNA / K_M_deg) + C_RNE + rna_conc) : 0.0
         du[tags.idx.rna] += V_TC_s - V_deg_s
     else
         # Michaelis-Menten production/degradation (matches MATLAB V_TC / V_deg time scale).

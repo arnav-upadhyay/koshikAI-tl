@@ -8,6 +8,7 @@
 # ---- Ignore files ---------
 Manifest.toml
 optimization_workflow.ipynb
+Mechanistic_model/
 
 # --- Ignore build artifacts, caches, etc. ---
 *.jl.cov

@@ -502,6 +502,8 @@ struct data_struct_integration
 	RNA::Float64
 	delta::Float64  # mRNA degradation rate [min⁻¹]
 	total_rna_ref::Ref{Float64}  # shared across sequences for Spindler TX competition
+	V_TC_dose::Float64        # per-gene DNA dosage (Spindler V_TC_scale(ID)); 1.0 = single-copy default
+	V_TC_dose_total::Float64  # Σ over all genes' dosages — RNA-polymerase competition term
 
 	num_species::Int64
 	len_sequence::Int64

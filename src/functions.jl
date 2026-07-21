@@ -1274,10 +1274,17 @@ end
 
 02.09.2025, Cedric Meyer, Generates local tags list needed for parallel computing in Arnavs pipeline
 """
-function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict, mRNA)
+function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_sd_dict, mRNA, v_tc_dose = nothing)
 
 	local_tags_list = Vector{txtl_types.data_struct_integration}()
 	shared_total_rna = Ref(0.0)
+
+	# Per-gene DNA dosage for Spindler transcription competition.
+	# When no per-gene map is given, fall back to the scalar scale.V_TC_scale for every gene
+	# (preserves the previous behaviour exactly).
+	_dose(g) = (v_tc_dose === nothing) ? Float64(tags.scale.V_TC_scale) :
+	           Float64(get(v_tc_dose, g, tags.scale.V_TC_scale))
+	v_tc_dose_total = sum(_dose(sn) for sn in seq_names)
 
 	for (i, seq_name) in enumerate(seq_names)
 
@@ -1333,7 +1340,7 @@ function generate_local_tags(seqs, seq_names, tags, efac_pos_aa_dict, efac_int_s
 			tags.init_c, tags.p_met, tags.p_seq, tags.p_dyn, seq_name,
 			Tags, alpha_one, alpha_two, matrix_N, tRNA_charg, t3_Codon_struc, 
 			efac_pos_aa, efac_int_sd, seq_names, idx_first_codon, mRNA_concentration,
-			delta, shared_total_rna,
+			delta, shared_total_rna, _dose(seq_name), v_tc_dose_total,
 			num_species, len_sequence, rate_RIB, q_R_elo, M, 
 			mtRNA, N_one, N_two, K_T3, K_tRNA)
 
@@ -2358,6 +2365,7 @@ function call_model(sequence_file, heterologous_genes, num_background_genes;
                     mRNA_multiplier = 1.0,
                     het_mRNA_conc = nothing,
                     background_selection = :first,
+                    het_V_TC_dose = nothing,
                     ode_reltol = nothing,
                     ode_abstol = nothing,
                     ode_maxiters = nothing,
@@ -2573,8 +2581,28 @@ function call_model(sequence_file, heterologous_genes, num_background_genes;
 		println("    free S30 = $(round(y0_all[idx.S30]; digits=2)) µM, S50 = $(round(y0_all[idx.S50]; digits=2)) µM")
 	end
 
+	# Per-gene DNA dosage for Spindler transcription competition (only used when spindler_tx=true).
+	#   - Real scalar       → apply to every heterologous gene.
+	#   - Dict{String,Real} → apply to named genes (heterologous or background).
+	# Genes not covered fall back to scale.V_TC_scale inside generate_local_tags.
+	v_tc_dose_map = nothing
+	if !isnothing(het_V_TC_dose)
+		v_tc_dose_map = Dict{String,Float64}()
+		if het_V_TC_dose isa Real
+			for gene in heterologous_genes
+				v_tc_dose_map[String(gene)] = Float64(het_V_TC_dose)
+			end
+		elseif het_V_TC_dose isa AbstractDict
+			for (k, v) in het_V_TC_dose
+				v_tc_dose_map[String(k)] = Float64(v)
+			end
+		else
+			error("call_model: het_V_TC_dose must be Real, Nothing, or AbstractDict{String,<:Real}, got $(typeof(het_V_TC_dose))")
+		end
+	end
+
 	# Prepare per-sequence tags (for use in ODE)
-	local_tags_list = generate_local_tags(seqs, seq_names, tags_pre, efac_pos_aa_dict, efac_int_sd_dict, mRNA);
+	local_tags_list = generate_local_tags(seqs, seq_names, tags_pre, efac_pos_aa_dict, efac_int_sd_dict, mRNA, v_tc_dose_map);
 
 
 	# Integration
@@ -2791,12 +2819,18 @@ function spindler_rts_comparison(;
 		m_rplL_alone::Float64 = 0.001,
 		m_rplL_rts::Float64 = 0.46,
 		m_rts_each::Float64 = 0.31,
+		dose_rplL_alone::Float64 = 1.0,      # V_TC_scale for rplL alone (→ ss ≈ 0.001 µM)
+		dose_rplL_rts::Float64 = 340.0,      # V_TC_scale for rplL +RTS  (→ ss ≈ 0.46 µM)
+		dose_rts_each::Float64 = 1133.0,     # V_TC_scale per eCU        (→ ss ≈ 0.31 µM)
 		t_sample::Float64 = 100.0,
 		ode_reltol::Float64 = 1e-8,
 		ode_abstol::Float64 = 1e-6,
 		ode_maxiters::Int = 5_000_000,
 		static_EFs::Bool = true,
-		spindler_75pct::Bool = true)
+		spindler_75pct::Bool = false,
+		spindler_tx::Bool = false,
+		ars_scale::Float64 = 20.0,           # ARS (tRNA-charging) scale on the +RTS leg
+		v_in_70sic_scale::Float64 = 75.0)    # 70S-IC initiation scale on the +RTS leg
 
 	rts_names = sort(collect(keys(rts_seqs)))
 	n_rts = length(rts_names)
@@ -2827,6 +2861,11 @@ function spindler_rts_comparison(;
 	conc_rts   = Dict{String,Float64}("rplL" => m_rplL_rts)
 	for nm in rts_names; conc_rts[nm] = m_rts_each; end
 
+	# Per-gene DNA dosage (Spindler V_TC_scale) — drives the steady-state mRNA under spindler_tx.
+	dose_alone = Dict("rplL" => dose_rplL_alone)
+	dose_rts   = Dict{String,Float64}("rplL" => dose_rplL_rts)
+	for nm in rts_names; dose_rts[nm] = dose_rts_each; end
+
 	m_total_rts = m_rplL_rts + n_rts * m_rts_each
 	println("Spindler comparison (paper design):")
 	println("  WITHOUT RTS: rplL alone, mRNA = $m_rplL_alone µM  (DEFAULT scales, 1 sequence)")
@@ -2836,9 +2875,9 @@ function spindler_rts_comparison(;
 	# These are ONLY used for the +RTS case.  The alone case uses defaults (all scales=1),
 	# matching MAIN_single_sequence.m.
 	spindler_scale = txtl_types.make_scale(
-		V_IN_70SIC_scale = 75.0,
+		V_IN_70SIC_scale = v_in_70sic_scale,
 		V_IN_IF2D_scale  = 2.0,
-		ARS_scale        = 20.0 .* ones(20),
+		ARS_scale        = ars_scale .* ones(20),
 	)
 
 	# ── Run WITHOUT RTS (rplL alone — default scales, matching MAIN_single_sequence.m) ──
@@ -2846,11 +2885,13 @@ function spindler_rts_comparison(;
 	res_alone = call_model(alone_name, ["rplL"], 0;
 		growth_rate = growth_rate,
 		het_mRNA_conc = conc_alone,
+		het_V_TC_dose = dose_alone,
 		ode_reltol = ode_reltol, ode_abstol = ode_abstol,
 		ode_maxiters = ode_maxiters,
 		return_details = true, return_sol = true,
 		static_EFs = static_EFs,
-		spindler_75pct = false)
+		spindler_75pct = spindler_75pct,
+		spindler_tx = spindler_tx)
 
 	# ── Run WITH RTS (Spindler scales, matching MAIN_..._reference_transcriptome.m) ──
 	println("\n──── Running WITH RTS (rplL + eCU, SPINDLER scales) ────")
@@ -2859,11 +2900,13 @@ function spindler_rts_comparison(;
 		custom_scale = spindler_scale,
 		growth_rate = growth_rate,
 		het_mRNA_conc = conc_rts,
+		het_V_TC_dose = dose_rts,
 		ode_reltol = ode_reltol, ode_abstol = ode_abstol,
 		ode_maxiters = ode_maxiters,
 		return_details = true, return_sol = true,
 		static_EFs = static_EFs,
-		spindler_75pct = false)
+		spindler_75pct = spindler_75pct,
+		spindler_tx = spindler_tx)
 
 	# ── Active ribosome loading diagnostic (per-gene breakdown) ──
 	function _active_rib_per_gene(sol, p, t)
