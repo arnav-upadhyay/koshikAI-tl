@@ -1,7 +1,7 @@
 # TXTLv2 — Translation model (background competition)
 
 ## 1. Installation
-- Julia 1.x (state the version you used, e.g. 1.10 or 1.11)
+- Julia 1.10.3
 - Clone / unzip this folder
 - From the project root:
 
