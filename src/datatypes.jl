@@ -471,6 +471,14 @@ struct vectors
 	u_seq_zero::Vector{Float64}      # buffer for shared-cascade ODE call (zeroed per-gene vars)
 	du_zero::Vector{Float64}         # du buffer for shared-cascade ODE call
 	shared_cascade::Vector{Float64}  # extracted shared-cascade metabolite rates (length n_metab)
+
+	# Stall freezing. Mutated in place by the stall callback between accepted
+	# steps; the struct itself stays immutable (same pattern as total_rna_ref).
+	# A frozen gene keeps its state — and therefore its sequestered ribosomes —
+	# but is skipped by the RHS, removing its stiff block from the integration.
+	frozen::Vector{Bool}             # latched freeze flag per gene
+	freeze_time::Vector{Float64}     # sim-time of freeze, NaN if never frozen
+	n_active::Base.RefValue{Int}     # cached count of non-frozen genes
 end
 
 struct data_struct_integration 

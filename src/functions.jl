@@ -110,9 +110,11 @@ Function to read in sequences from a fasta file. Throws error if the sequence is
 """
 
 
+sequence_data_dir() = joinpath(@__DIR__, "..", "data", "sequences")
+
 function seqs_import_transcripts(sequence_file::String, seqs_to_use)
 	
-	sequence_path = joinpath(@__DIR__, "..", "data", "sequences")
+	sequence_path = sequence_data_dir()
 	# filename = sequence_path * "\\" * sequence_file
 	filename = joinpath(sequence_path, sequence_file)
 
@@ -1262,7 +1264,8 @@ function generate_p(local_tags_list)
 	shared_cascade  = zeros(n_metab)
 
     vectors = txtl_types.vectors(y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab, Ref(0.0),
-		u_seq_zero, du_zero, shared_cascade)
+		u_seq_zero, du_zero, shared_cascade,
+		fill(false, n_seq), fill(NaN, n_seq), Ref{Int}(n_seq))
 
     p = txtl_types.parameters(local_tags_list, vectors)
 
@@ -1612,18 +1615,23 @@ Aim: Enable parallel computing of du for multiple sequences.
 function ODE_parallel_distributed!(du, u, p, t)
 
     # Vectors and numbers 
-    @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab, u_seq_zero, du_zero, shared_cascade = p.vectors
+    @unpack y_codons_lengths, offsets, n_metab, n_seq, du_metab_all, du_codons, y_codons, results, du_seq, du_metab, u_seq_zero, du_zero, shared_cascade, frozen, n_active = p.vectors
 
     # Generate parts of u that need to be assembled specific to the sequence   
     @views u_metab =  u[1:n_metab]				                            # Save all pool species from u in a vector 
 
-    # ─── Shared-cascade correction (needed when n_seq > 1) ───
+    # Frozen (hard-stalled) genes are skipped below, so only this many sequences
+    # actually contribute to the accumulated shared cascade.  Without freezing
+    # this equals n_seq and the behaviour is unchanged.
+    n_live = n_active[]
+
+    # ─── Shared-cascade correction (needed when n_live > 1) ───
     # Each sequence's ODE call produces du[1:n_metab] = shared_kinetics + per_gene_effects.
     # The shared_kinetics (30S/IF/SC assembly, tRNA charging, EF cycles) are identical for
     # every sequence because they depend only on shared metabolites.  Accumulating across
-    # n_seq sequences therefore counts them n_seq times.  We compute the shared kinetics
-    # once (with per-gene variables zeroed) and subtract (n_seq − 1) copies after accumulation.
-    if n_seq > 1
+    # n_live sequences therefore counts them n_live times.  We compute the shared kinetics
+    # once (with per-gene variables zeroed) and subtract (n_live − 1) copies after accumulation.
+    if n_live > 1
         local_tags_1 = p.local_tags_list[1]
         @views u_seq_zero[1:n_metab] .= u_metab
         @views u_seq_zero[n_metab+1:end] .= 0.0
@@ -1631,18 +1639,30 @@ function ODE_parallel_distributed!(du, u, p, t)
         @views shared_cascade .= du_zero[1:n_metab]
     end
 
-    # thread-local accumulator for du[1:n_metab]
-	# Jupyter/REPL often runs on an extra "interactive" thread whose id is
-    # Threads.nthreads() + 1; allocate one extra slot to avoid BoundsError.
-    du_head_threads = [zero(u_metab) for _ in 1:(Threads.nthreads() + 1)]
-
+    # Reproducibility: each gene accumulates into its OWN slot of du_metab_all
+    # and the slots are summed below in gene order, so the result never depends
+    # on which thread ran which gene. The earlier version indexed a per-THREAD
+    # accumulator, which under the default :dynamic schedule grouped the partial
+    # sums differently on every run; since floating-point addition is not
+    # associative that made the model non-reproducible (~1e-3 drift in PRT at
+    # rtol=1e-8). `@threads :static` would also fix that but is not composable —
+    # it throws if the solver ever calls this from inside another threaded
+    # region, which it does once a callback is attached.
     Threads.@threads for i in 1:n_seq
-        tid = Threads.threadid()
-
         local_tags = p.local_tags_list[i]		                            # Extraction of local tags
         idx = n_metab + offsets[i]                                          # Create index to access u on the sequence specific indexes
         len = y_codons_lengths[i]            
-        
+
+        # Hard-stalled gene: hold its state (du = 0) and skip its stiff block.
+        # Its ribosomes, mRNA and PTC therefore stay sequestered on this
+        # transcript and are never returned to the shared free pools, which is
+        # what distinguishes freezing from dropping the gene. It also stops
+        # contributing to the shared cascade — hence n_live above.
+        if frozen[i]
+            @views du[idx+1:idx+len] .= 0.0
+            continue
+        end
+
         # thread-safe local views
         u_codons = @view u[idx+1 : idx+len]
 
@@ -1655,21 +1675,23 @@ function ODE_parallel_distributed!(du, u, p, t)
 
         ODE!(du_seq_local, u_seq, local_tags, t)	                        # Give those sequence specific vectors to the ODE! function  
 
-        # thread-local accumulation
-        @views du_head_threads[tid] .+= du_seq_local[1:n_metab]               # Save du results from sequence specific ODEs to common rates vector
+        @views du_metab_all[i] .= du_seq_local[1:n_metab]                   # Save this gene's metabolite rates in its own slot
 
         @views du[idx+1:idx+len] .= du_seq_local[n_metab+1:end]
     end
 
-    # Add up du for metabolites for all sequences
+    # Add up du for metabolites for all sequences, in gene order so the
+    # summation order is fixed. Frozen genes are skipped: their slot still
+    # holds whatever they contributed before freezing.
     du[1:n_metab] .= 0
-    for acc in du_head_threads
-        @views du[1:n_metab] .+= acc
+    @inbounds for i in 1:n_seq
+        frozen[i] && continue
+        @views du[1:n_metab] .+= du_metab_all[i]
     end
 
-    # Subtract over-counted shared cascade: accumulated has n_seq copies, need only 1
-    if n_seq > 1
-        factor = Float64(n_seq - 1)
+    # Subtract over-counted shared cascade: accumulated has n_live copies, need only 1
+    if n_live > 1
+        factor = Float64(n_live - 1)
         @inbounds for j in 1:n_metab
             du[j] -= factor * shared_cascade[j]
         end
@@ -1802,6 +1824,29 @@ function sequence_dataframes(sol, local_tags_list)
 end
 
 """
+	t3_efg_saturation(cc, EGT, KM_T3j, KM_EFGGTP)
+
+Michaelis–Menten saturation for cognate ternary complex and EF-G·GTP.
+
+Algebraically identical to `1 / (1 + KM_T3j/cc + KM_EFGGTP/EGT)` whenever
+`cc > 0` and `EGT > 0`, but evaluated as
+
+	(cc * EGT) / (cc * EGT + KM_T3j * EGT + KM_EFGGTP * cc)
+
+so the factor is 0 (not Inf) when either pool is empty. Negative arguments
+are treated as 0. This is the numerically stable form of the elongation
+denominator — the `KM/cc` writing is a removable singularity at `cc = 0`.
+"""
+@inline function t3_efg_saturation(cc, EGT, KM_T3j, KM_EFGGTP)
+	cc_pos  = cc  > 0.0 ? Float64(cc)  : 0.0
+	egt_pos = EGT > 0.0 ? Float64(EGT) : 0.0
+	num = cc_pos * egt_pos
+	den = num + KM_T3j * egt_pos + KM_EFGGTP * cc_pos
+	return den > 0.0 ? num / den : 0.0
+end
+
+
+"""
 	calculate_V_TL_EL(tags, y)
 
 Calculates V_TL_EL just like in rhs_sequence. Needed for plotting the translation elongation rate profile.
@@ -1867,9 +1912,6 @@ function calculate_V_TL_EL(tags, y)
 
     V_TL_EL	= zeros(len_sequence-1);
 
-    EGT_inv = inv(EGT)
-
-
     for i in 1:len_sequence-2
 
         cod_next = tags.species_and_sequences.Seq[i+1]
@@ -1879,10 +1921,9 @@ function calculate_V_TL_EL(tags, y)
         k = tags.species_and_sequences.cod_idx[cod_curr]    # O(1) Lookup
 
         cc = c_Codon[j]
-
+        sat = t3_efg_saturation(cc, EGT, KM_T3j, KM_EFGGTP)
         eff = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i])
-        denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
-        V_TL_EL[i+1] = q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff / denom
+        V_TL_EL[i+1] = q_R_elo[i] * k_TLEmaxj * c_RIB[i] * eff * sat
 
     end
 
@@ -1967,9 +2008,9 @@ function spindler_codon_translation_time_at_u(u_full, p, gene::String, t_used::F
 
 	# Compute intrinsic per-codon elongation rate (no queuing), matching Spindler's
 	# τ_j = 1 / (k_max * ε_j * T3_j/(KM+T3_j) * EFG·GTP/(KM_EFG+EFG·GTP))
+	# Evaluated via t3_efg_saturation so the same identity is 0 (not Inf) at empty pools.
 	@unpack k_TLEmaxj, KM_T3j, KM_EFGGTP = tags_si.p_seq.EL
 	EGT = max(u_seq[tags_si.idx.EGT], 0.0)
-	EGT_inv = EGT > 0.0 ? inv(EGT) : inv(eps(Float64))
 
 	num_species = tags_si.num_species
 	u_metab_safe = max.(@view(u_seq[1:num_species]), 0.0)
@@ -1992,10 +2033,10 @@ function spindler_codon_translation_time_at_u(u_full, p, gene::String, t_used::F
 		j = tags_si.species_and_sequences.cod_idx[cod_next]
 		k = tags_si.species_and_sequences.cod_idx[cod_curr]
 		cc = c_Codon[j]
-		if cc > 0.0
+		sat = t3_efg_saturation(cc, EGT, KM_T3j, KM_EFGGTP)
+		if sat > 0.0
 			eff = efac[k] * min(tags_si.efac_pos_aa[i], tags_si.efac_int_sd[i])
-			denom = 1.0 + KM_T3j / cc + KM_EFGGTP * EGT_inv
-			v_intrinsic[i] = (k_TLEmaxj * eff / denom) / 60.0  # codons/s
+			v_intrinsic[i] = (k_TLEmaxj * eff * sat) / 60.0  # codons/s
 		end
 	end
 
@@ -2093,6 +2134,77 @@ function collect_pool_diagnostics(sol, p, t_sample::Float64; primary_gene::Strin
 		RIB_active_per_gene = rib_per_gene,
 		PRT_primary = prt_primary,
 	)
+end
+
+"""
+	print_track_b_report(sol, p; primary_gene="rplL", t_sample=nothing)
+
+Track B readout: translation *delay* (dwell on the slowest codon) versus protein
+made, with freeze off. No new reactions — this is the existing MM wait,
+`τ ∝ 1/v(c_T3)`, reported so a long wait can be read as less full-length protein
+by harvest time.
+
+Prints:
+- the most depleted ternary-complex pool (name, µM, KM, KM/c)
+- per-gene: harvest PRT, unsmoothed max dwell, stall codon/position, ribosomes
+  on that transcript, and (for `primary_gene`) smoothed mean v and Στ
+"""
+function print_track_b_report(sol, p; primary_gene::String = "rplL", t_sample::Union{Nothing,Float64} = nothing)
+	t_e = t_sample === nothing ? sol.t[end] : clamp(t_sample, sol.t[1], sol.t[end])
+	u   = sol(t_e)
+	tags = p.local_tags_list[1]
+	idx  = tags.idx
+	names_t3 = tags.species_and_sequences.Tag[idx.a1t:idx.y1t]
+	t3 = u[idx.a1t:idx.y1t]
+	imin = argmin(t3)
+	t3_lim = t3[imin]
+	t3_name = String(names_t3[imin])
+	KM = tags.p_seq.EL.KM_T3j
+	ratio = t3_lim > 0.0 ? KM / t3_lim : Inf
+
+	println("\n", "─"^78)
+	println("  Track B: delay → protein   t = ", round(t_e, digits = 2), " min")
+	@printf("  limiting T3: %s = %.4e µM   KM_T3j = %.2f µM   KM/c = %.3g\n",
+	        t3_name, t3_lim, KM, ratio)
+	@printf("  (c ≫ KM → fast decode; c ≲ KM → wait; c ~ 0 → wait is huge, flux ~ 0)\n")
+
+	seq_names = tags.species_and_sequences.seq_names
+	n_metab = p.vectors.n_metab
+	@printf("  %-10s %12s %12s %6s %8s %12s\n",
+	        "gene", "PRT (µM)", "tau_max (s)", "pos", "codon", "rib (µM)")
+	prim_tau = NaN
+	prim_prt = NaN
+	for i in 1:p.vectors.n_seq
+		g = String(seq_names[i])
+		m = gene_stall_metrics(u, p, i)
+		base = n_metab + p.vectors.offsets[i]
+		prt_i = Float64(u[base + 3])
+		@printf("  %-10s %12.5g %12.4g %6d %8s %12.4g\n",
+		        g, prt_i, m.tau_max, m.pos_max, m.codon_max, m.rib_total)
+		if g == primary_gene
+			prim_tau = m.tau_max
+			prim_prt = prt_i
+		end
+	end
+
+	try
+		sp = spindler_codon_translation_time_at_u(u, p, primary_gene, t_e)
+		@printf("  %s smoothed:  Στ = %.4g s   mean v = %.4g codon/s   L = %d\n",
+		        primary_gene, sp.total_time_s, sp.mean_v, sp.L)
+	catch e
+		@warn "Track B: smoothed elongation metrics failed" exception = e
+	end
+
+	if prim_tau > 100.0 && (t3_lim < KM || !isfinite(ratio))
+		println("  read: limiting T3 is below KM and ", primary_gene,
+		        " dwell is long — delay, not a missing tRNA, is why protein lags.")
+	elseif prim_tau <= 100.0
+		println("  read: ", primary_gene, " dwell is not a hard stall at this snapshot;")
+		println("        compare PRT across genes / N to see load, not a single-codon wait.")
+	end
+	println("─"^78)
+	return (t = t_e, t3_name = t3_name, t3_uM = t3_lim, KM_over_c = ratio,
+	        primary_tau_s = prim_tau, primary_PRT = prim_prt)
 end
 
 """
@@ -2343,7 +2455,8 @@ end
   - het_mRNA_conc:   if set, overrides mRNA for heterologous genes only (background unchanged).
                      Either a single number (µM, applied to every heterologous gene), or a
                      Dict{String,Float64} mapping gene name → µM. Takes priority over mRNA_multiplier
-                     for those genes.
+                     for those genes. Build a skewed mini-transcriptome with
+                     `reduced_cell_load()` (see reduced_cell_load.jl) and pass `cell.het_mRNA_conc`.
   - background_selection: :first (default) = first N rows of the mRNA table (spreadsheet order);
                           :top_mRNA = N genes with highest tabulated mRNA (after mRNA_multiplier and
                           het_mRNA_conc), excluding heterologous names — stronger ribosome competition
@@ -2355,6 +2468,24 @@ end
   - elongation_time: time (same units as `tspan`, default 20.0) for that snapshot.
   - return_sol: if true (requires return_details), the returned NamedTuple also contains `sol` and `p`,
     so the caller can post-process (e.g. `spindler_codon_translation_time(res.sol, res.p, "rplL")`).
+
+09.10.2026; Optional stall freezing (see stall_freeze.jl). Default off, so existing results are unchanged.
+  - freeze_stalled:  if true, a gene whose cognate ternary-complex pool has collapsed and whose
+                     ribosomes have stopped moving is latched as "frozen": its state is held (du = 0)
+                     and its stiff block is skipped. The held state keeps its ribosomes, mRNA and PTC
+                     sequestered on that transcript, so resource competition is preserved — unlike
+                     dropping the gene, which would release the demand that caused the stall.
+  - stall_protect:   names of genes that must never be frozen. Defaults to the FIRST entry of
+                     heterologous_genes, i.e. the gene under study. Callers typically pass the whole
+                     competing set (primary + background) as heterologous_genes, so protecting all of
+                     them would leave nothing eligible and silently disable the feature.
+  - stall_tau_s:          dwell-time threshold marking a hard stall (s, default 100.0)
+  - stall_pool_frac:      freeze only if min cognate pool < this fraction of KM_T3j (default 0.01)
+  - stall_du_tol:         quasi-stationarity tolerance (default 1e-6) on this gene's contribution
+                          to the shared metabolite rates — i.e. on the size of the discontinuity
+                          that freezing it would introduce
+  - stall_check_every_min: how often the freeze check runs, in sim-minutes (default 1.0)
+  With return_details, the result carries `freeze` (see `freeze_report`) describing what froze and when.
 
   If the main solve fails or throws, call_model prints the largest-|du| state components (see print_problematic_rhs).
 """
@@ -2378,7 +2509,14 @@ function call_model(sequence_file, heterologous_genes, num_background_genes;
                     static_EFs = false,
                     spindler_75pct = false,
                     progress_ref::Union{Nothing, Base.RefValue} = nothing,
-                    progress_save_every_min::Float64 = 1.0)
+                    progress_save_every_min::Float64 = 1.0,
+                    freeze_stalled::Bool = false,
+                    stall_tau_s::Float64 = 100.0,
+                    stall_pool_frac::Float64 = 0.01,
+                    stall_du_tol::Float64 = 1e-6,
+                    stall_check_every_min::Float64 = 1.0,
+                    stall_protect::Union{Nothing, AbstractVector{<:AbstractString}} = nothing,
+                    stall_verbose::Bool = true)
 
 	include("parameters.jl")
 	
@@ -2649,18 +2787,50 @@ function call_model(sequence_file, heterologous_genes, num_background_genes;
 	#
 	# Initial fire writes y0_all at t=0, so even a hang BEFORE the first
 	# successful step yields an inspectable snapshot.
-	local solve_cb
+	cbs = Any[]
 	if progress_ref !== nothing
 		_save_dt = max(progress_save_every_min, 0.05)
-		solve_cb = PeriodicCallback(_save_dt; initial_affect = true) do integrator
+		push!(cbs, PeriodicCallback(_save_dt; initial_affect = true) do integrator
 			progress_ref[] = (t = integrator.t,
 			                  u = copy(integrator.u),
 			                  p = integrator.p)
 			return nothing
-		end
-	else
-		solve_cb = nothing
+		end)
 	end
+
+	# Stall freezing (opt-in). Latched between accepted steps so the RHS stays
+	# continuous within a step.
+	#
+	# Only the gene under study is protected, NOT every heterologous gene:
+	# callers routinely pass the whole competing set (primary + background)
+	# through `heterologous_genes`, so protecting all of them would leave
+	# nothing eligible and silently disable the feature.
+	reset_freeze_state!(p)
+	if freeze_stalled
+		protect_names = stall_protect === nothing ?
+		                (isempty(heterologous_genes) ? String[] : [String(first(heterologous_genes))]) :
+		                String.(stall_protect)
+		protect = Set{Int}()
+		for g in protect_names
+			try
+				push!(protect, _find_seq_index(p, g))
+			catch
+				@warn "freeze_stalled: protected gene not found in seq_names" gene = g
+			end
+		end
+		protect_str = isempty(protect_names) ? "none" : join(protect_names, ", ")
+		println("  Stall freezing: ON  tau>$(stall_tau_s)s  pool<$(stall_pool_frac)*KM  du<$(stall_du_tol)  every $(stall_check_every_min) min  (protected: $protect_str)")
+		push!(cbs, make_stall_callback(p;
+		                               tau_s           = stall_tau_s,
+		                               pool_frac       = stall_pool_frac,
+		                               du_tol          = stall_du_tol,
+		                               check_every_min = stall_check_every_min,
+		                               protect         = protect,
+		                               verbose         = stall_verbose))
+	end
+
+	solve_cb = isempty(cbs) ? nothing :
+	           (length(cbs) == 1 ? cbs[1] : CallbackSet(cbs...))
 
 	local sol
 	try
@@ -2730,7 +2900,20 @@ function call_model(sequence_file, heterologous_genes, num_background_genes;
 				@warn "call_model: elongation metrics for rplL failed" exception = e
 			end
 		end
-		base = (translation_rate = translation_rate, final_PRT = final_PRT, elongation_rplL = elong_rplL)
+		# Stall-freeze outcome. Built from the last integrated state so it is
+		# still meaningful when the solve aborted early.
+		freeze = nothing
+		if freeze_stalled
+			u_rep = length(sol.t) > 0 ? sol.u[end] : y0_all
+			try
+				freeze = freeze_report(p, u_rep)
+				stall_verbose && print_freeze_summary(freeze)
+			catch e
+				@warn "call_model: freeze_report failed" exception = e
+			end
+		end
+		base = (translation_rate = translation_rate, final_PRT = final_PRT,
+		        elongation_rplL = elong_rplL, freeze = freeze)
 		if return_sol
 			return merge(base, (sol = sol, p = p))
 		else

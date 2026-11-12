@@ -95,7 +95,8 @@ function rhs_sequence!(du, u, p)
     # V_EL
     # Clamp metabolite concentrations to ≥ 0 before computing effective T3 pools.
     # Negative T3 complexes (numerical drift) would make c_Codon ≈ 0 → division
-    # blow-up in matrix_free_KT3! and KM_T3j/cc denominator collapse.
+    # blow-up in matrix_free_KT3!. Elongation itself uses t3_efg_saturation
+    # (finite at empty pools); this clamp is still required for the T3 mapping.
     u_metab_safe = max.(@view(u[1:tags.num_species]), 0.0)
     C_vect = reshape(u_metab_safe, 1, tags.num_species)
     c_Codon = tags.t3_Codon_struc * C_vect'
@@ -103,8 +104,6 @@ function rhs_sequence!(du, u, p)
     V_TL_EL	= zeros(tags.len_sequence-1);
 
     EGT_pos = max(EGT, 0.0)
-    EGT_inv = (EGT_pos > 0.0) ? inv(EGT_pos) : inv(eps(Float64))
-
 
     @inbounds for i in 1:tags.len_sequence-2
 
@@ -115,16 +114,13 @@ function rhs_sequence!(du, u, p)
         k = tags.species_and_sequences.cod_idx[cod_curr]    # O(1) Lookup
 
         cc = c_Codon[j]
-
-        if cc == 0
+        sat = t3_efg_saturation(cc, EGT_pos, KM_T3j, KM_EFGGTP)
+        if sat == 0.0
             V_TL_EL[i+1] = 0
         else
             eff = efac[k] * min(tags.efac_pos_aa[i], tags.efac_int_sd[i])
-
-            denom = 1 + KM_T3j/cc + KM_EFGGTP*EGT_inv
-
             V_TL_EL[i+1] =
-                tags.q_R_elo[i] * k_TLEmaxj * max(c_RIB[i], 0.0) * eff / denom
+                tags.q_R_elo[i] * k_TLEmaxj * max(c_RIB[i], 0.0) * eff * sat
         end
     end
 

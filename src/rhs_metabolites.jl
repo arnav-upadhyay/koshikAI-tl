@@ -8,7 +8,14 @@
 
 # Can mod_met_rhs and mod_seq_rhs be combined so that du can be directly saved into du?
 
+const LEU_RS_COMPETITIVE = true
+const _leu_rs_competitive_announced = Ref(false)
+
 function rhs_metabolites!(du, u, p)
+	if !_leu_rs_competitive_announced[]
+		println("rhs_metabolites!: competitive Leu-RS live (five isoacceptors share V_ARS[10])")
+		_leu_rs_competitive_announced[] = true
+	end
 
 
 	# du =zeros(Float64, length(u))
@@ -148,6 +155,23 @@ function rhs_metabolites!(du, u, p)
 	# V_ARS[j] = k_cat[j] * c_ARS[j] * ARS_scale[j]  (Spindler: ARS_scale=20)
 	V_ARS = k_cat .* tags.init_c.c_ARS .* tags.scale.ARS_scale
 
+	# Competitive Leu-RS: one V_max shared by t1l…t5l (Subramaniam isoacceptor competition).
+	# Independent MM was v_i = V/(D0 + KM_i/t_i), so five isoacceptors could draw 5V and
+	# Leu-ARS scale hit all of them equally. Now v_i = V·σ_i/(D0+Σσ) with σ_i = t_i/KM_i,
+	# hence Σ v_i ≤ V and abundant tRNA outcompetes rare CTA when charging is limiting.
+	D0_leu = 1 + KM_ARS_aa[10] * inv_Leu + KM_ARS_ATP[10] * inv_ATP
+	σL1 = t1l / KM_ARS_tRNA[12]
+	σL2 = t2l / KM_ARS_tRNA[13]
+	σL3 = t3l / KM_ARS_tRNA[14]
+	σL4 = t4l / KM_ARS_tRNA[15]
+	σL5 = t5l / KM_ARS_tRNA[16]
+	den_leu = D0_leu + σL1 + σL2 + σL3 + σL4 + σL5
+	V_leu1 = V_ARS[10] * σL1 / den_leu
+	V_leu2 = V_ARS[10] * σL2 / den_leu
+	V_leu3 = V_ARS[10] * σL3 / den_leu
+	V_leu4 = V_ARS[10] * σL4 / den_leu
+	V_leu5 = V_ARS[10] * σL5 / den_leu
+
 	du[tags.idx.ta1] = -(V_ARS[1] / (1 + KM_ARS_aa[1] *inv_Ala + KM_ARS_ATP[1]*inv_ATP + KM_ARS_tRNA[1]/ta1))	# 36
 	du[tags.idx.ta2] = -(V_ARS[1] / (1 + KM_ARS_aa[1] *inv_Ala + KM_ARS_ATP[1]*inv_ATP + KM_ARS_tRNA[2]/ta2))	# 37
 	du[tags.idx.tc1] = -(V_ARS[2] / (1 + KM_ARS_aa[2] *inv_Cys + KM_ARS_ATP[2]*inv_ATP + KM_ARS_tRNA[3]/tc1))	# 38
@@ -159,11 +183,11 @@ function rhs_metabolites!(du, u, p)
 	du[tags.idx.th1] = -(V_ARS[7] / (1 + KM_ARS_aa[7] *inv_His + KM_ARS_ATP[7]*inv_ATP + KM_ARS_tRNA[9]/th1))	# 44
 	du[tags.idx.ti1] = -(V_ARS[8] / (1 + KM_ARS_aa[8] *inv_Ile + KM_ARS_ATP[8]*inv_ATP + KM_ARS_tRNA[10]/ti1))		# 45
 	du[tags.idx.tk1] = -(V_ARS[9] / (1 + KM_ARS_aa[9] *inv_Lys + KM_ARS_ATP[9]*inv_ATP + KM_ARS_tRNA[11]/tk1))		# 46
-	du[tags.idx.t1l] = -(V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[12]/t1l))	# 47
-	du[tags.idx.t2l] = -(V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[13]/t2l))	# 48
-	du[tags.idx.t3l] = -(V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[14]/t3l))	# 49
-	du[tags.idx.t4l] = -(V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[15]/t4l))	# 50
-	du[tags.idx.t5l] = -(V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[16]/t5l))	# 51
+	du[tags.idx.t1l] = -V_leu1	# 47
+	du[tags.idx.t2l] = -V_leu2	# 48
+	du[tags.idx.t3l] = -V_leu3	# 49
+	du[tags.idx.t4l] = -V_leu4	# 50
+	du[tags.idx.t5l] = -V_leu5	# 51
 	du[tags.idx.tm1] = -(V_ARS[11] / (1 + KM_ARS_aa[11] *inv_Met + KM_ARS_ATP[11]*inv_ATP + KM_ARS_tRNA[17]/tm1))	# 52
 	du[tags.idx.tn1] = -(V_ARS[12] / (1 + KM_ARS_aa[12] *inv_Asn + KM_ARS_ATP[12]*inv_ATP + KM_ARS_tRNA[18]/tn1))	# 53
 	du[tags.idx.tp1] = -(V_ARS[13] / (1 + KM_ARS_aa[13] *inv_Pro + KM_ARS_ATP[13]*inv_ATP + KM_ARS_tRNA[19]/tp1))	# 54
@@ -200,11 +224,11 @@ function rhs_metabolites!(du, u, p)
 	du[tags.idx.tH1] = (V_ARS[7] / (1 + KM_ARS_aa[7] *inv_His + KM_ARS_ATP[7]*inv_ATP + KM_ARS_tRNA[9]/th1))	 - (k_T3j_f * EFT * tH1 - k_T3j_d * h1t)	# 102
 	du[tags.idx.tI1] = (V_ARS[8] / (1 + KM_ARS_aa[8] *inv_Ile + KM_ARS_ATP[8]*inv_ATP + KM_ARS_tRNA[10]/ti1))	 - (k_T3j_f * EFT * tI1 - k_T3j_d * i1t)	# 103	
 	du[tags.idx.tK1] = (V_ARS[9] / (1 + KM_ARS_aa[9] *inv_Lys + KM_ARS_ATP[9]*inv_ATP + KM_ARS_tRNA[11]/tk1))	 - (k_T3j_f * EFT * tK1 - k_T3j_d * k1t)	# 104	
-	du[tags.idx.tL1] = (V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[12]/t1l)) - (k_T3j_f * EFT * tL1 - k_T3j_d * l1t)	# 105
-	du[tags.idx.tL2] = (V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[13]/t2l)) - (k_T3j_f * EFT * tL2 - k_T3j_d * l2t)	# 106
-	du[tags.idx.tL3] = (V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[14]/t3l)) - (k_T3j_f * EFT * tL3 - k_T3j_d * l3t)	# 107
-	du[tags.idx.tL4] = (V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[15]/t4l)) - (k_T3j_f * EFT * tL4 - k_T3j_d * l4t)	# 108
-	du[tags.idx.tL5] = (V_ARS[10] / (1 + KM_ARS_aa[10] *inv_Leu + KM_ARS_ATP[10]*inv_ATP + KM_ARS_tRNA[16]/t5l)) - (k_T3j_f * EFT * tL5 - k_T3j_d * l5t)	# 109
+	du[tags.idx.tL1] = V_leu1 - (k_T3j_f * EFT * tL1 - k_T3j_d * l1t)	# 105
+	du[tags.idx.tL2] = V_leu2 - (k_T3j_f * EFT * tL2 - k_T3j_d * l2t)	# 106
+	du[tags.idx.tL3] = V_leu3 - (k_T3j_f * EFT * tL3 - k_T3j_d * l3t)	# 107
+	du[tags.idx.tL4] = V_leu4 - (k_T3j_f * EFT * tL4 - k_T3j_d * l4t)	# 108
+	du[tags.idx.tL5] = V_leu5 - (k_T3j_f * EFT * tL5 - k_T3j_d * l5t)	# 109
 	du[tags.idx.tM1] = (V_ARS[11] / (1 + KM_ARS_aa[11] *inv_Met + KM_ARS_ATP[11]*inv_ATP + KM_ARS_tRNA[17]/tm1)) - (k_T3j_f * EFT * tM1 - k_T3j_d * m1t)	# 110
 	du[tags.idx.tN1] = (V_ARS[12] / (1 + KM_ARS_aa[12] *inv_Asn + KM_ARS_ATP[12]*inv_ATP + KM_ARS_tRNA[18]/tn1)) - (k_T3j_f * EFT * tN1 - k_T3j_d * n1t)	# 111
 	du[tags.idx.tP1] = (V_ARS[13] / (1 + KM_ARS_aa[13] *inv_Pro + KM_ARS_ATP[13]*inv_ATP + KM_ARS_tRNA[19]/tp1)) - (k_T3j_f * EFT * tP1 - k_T3j_d * p1t)	# 112
